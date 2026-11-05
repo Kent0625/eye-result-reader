@@ -19,10 +19,16 @@ export function parseReceiptText(rawText) {
     return result;
   }
 
-  // Normalize text: replace em-dash/en-dash with minus, standardize commas as periods in numbers
+  // Normalize text:
+  // - Convert various dash/minus unicode characters to standard hyphen
+  // - Join detached signs (e.g. "- 1.75" -> "-1.75", "+ 0.50" -> "+0.50")
+  // - Convert European decimal commas ("-1,75" -> "-1.75")
+  // - Convert standalone delimiter commas/semicolons/bars into spaces
   const cleanedText = rawText
-    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, '-')
-    .replace(/(\d+),(\d{2})/g, '$1.$2');
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212~_]/g, '-')
+    .replace(/([+-])\s+(\d)/g, '$1$2')
+    .replace(/(\d+),(\d{2})\b/g, '$1.$2')
+    .replace(/[,;|]/g, ' ');
 
   const lines = cleanedText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
@@ -56,15 +62,15 @@ export function parseReceiptText(rawText) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Detect Right Eye headers: <R>, [R], (R), R:, RIGHT, OD, <OD>, [OD]
-    if (/(?:^[<\[\(]?\s*R\s*[>\]\)]?[:\s]|^RIGHT\b|^[<\[\(]?\s*OD\s*[>\]\)]?)/i.test(line)) {
+    // Detect Right Eye headers: <R>, [R], (R), R:, RIGHT, OD, <OD>, [OD] (with colon, space, or end of line)
+    if (/(?:^[<\[\(]?\s*R\s*[>\]\)]?([:\s]|$)|^RIGHT\b|^[<\[\(]?\s*OD\s*[>\]\)]?([:\s]|$))/i.test(line)) {
       currentEye = 'OD';
       odLines.push(line);
       continue;
     }
 
     // Detect Left Eye headers: <L>, [L], (L), L:, LEFT, OS, <OS>, [OS]
-    if (/(?:^[<\[\(]?\s*L\s*[>\]\)]?[:\s]|^LEFT\b|^[<\[\(]?\s*OS\s*[>\]\)]?)/i.test(line)) {
+    if (/(?:^[<\[\(]?\s*L\s*[>\]\)]?([:\s]|$)|^LEFT\b|^[<\[\(]?\s*OS\s*[>\]\)]?([:\s]|$))/i.test(line)) {
       currentEye = 'OS';
       osLines.push(line);
       continue;
@@ -157,13 +163,20 @@ function parseEyeSection(sectionLines, eyeName, existingPps) {
  * - -1.75  -0.50   85
  * - +0.25  -0.75  175
  * - -2.00   0.00    0
+ * - 1  -1.75  -0.50  85
  * - * -1.75 -0.50 85 4.5
  */
 export function parseTripletLine(line) {
-  // Strip non-relevant header words
-  const cleaned = line
+  // Strip non-relevant header words and index numbers
+  let cleaned = line
     .replace(/^(?:[*#\s]|[<\[\(]?(?:R|L|OD|OS|AVE|AVG)[>\]\)]?[:\s]*)*/i, '')
     .trim();
+
+  // Strip single-digit shot index (e.g. "1  -1.75...")
+  cleaned = cleaned.replace(/^[1-9]\s+/, '').trim();
+
+  // Replace delimiters (commas, semicolons, bars) with spaces
+  cleaned = cleaned.replace(/[,;|]/g, ' ');
 
   // Pattern matches 3 numbers:
   // 1: Signed float for SPH: [+-]?\d+(?:\.\d+)?
