@@ -408,7 +408,8 @@ function updateUILanguage() {
   document.getElementById('next-step-title').textContent = dict.nextStepTitle;
   document.getElementById('next-step-action').textContent = dict.nextStepAction;
   document.getElementById('glossary-title').textContent = dict.glossaryTitle;
-  document.getElementById('glossary-sub').textContent = dict.glossaryIntro;
+  const glossaryIntroEl = document.getElementById('glossary-intro');
+  if (glossaryIntroEl) glossaryIntroEl.textContent = dict.glossaryIntro;
   document.getElementById('disclaimer-full-title').textContent = dict.disclaimerFullTitle;
   document.getElementById('disclaimer-full-text').textContent = dict.disclaimerFullText;
   document.getElementById('save-record-btn-text').textContent = dict.saveRecordBtn;
