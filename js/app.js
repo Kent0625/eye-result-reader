@@ -68,6 +68,8 @@ const elements = {
   ocrProgressTitle: document.getElementById('ocr-progress-title'),
   ocrProgressStatus: document.getElementById('ocr-progress-status'),
   ocrProgressBar: document.getElementById('ocr-progress-bar'),
+  btnCancelOcr: document.getElementById('btn-cancel-ocr'),
+  cancelOcrBtnText: document.getElementById('cancel-ocr-btn-text'),
 
   // Screen 2: Confirm
   previewImage: document.getElementById('preview-image'),
@@ -227,6 +229,14 @@ function setupEventListeners() {
 
   elements.btnSampleReceipt.addEventListener('click', loadSampleReceipt);
 
+  // Cancel / Skip OCR button
+  elements.btnCancelOcr.addEventListener('click', () => {
+    ocrAborted = true;
+    elements.ocrProgressOverlay.hidden = true;
+    switchTab('confirm');
+    showToast('Skipped reading. Please check the photo and enter numbers.');
+  });
+
   // Rotation Controls
   elements.btnRotateLeft.addEventListener('click', () => rotatePreview(-90));
   elements.btnRotateRight.addEventListener('click', () => rotatePreview(90));
@@ -353,6 +363,9 @@ function updateUILanguage() {
   document.getElementById('upload-file-btn-text').textContent = dict.uploadFileBtn;
   document.getElementById('manual-entry-btn-text').textContent = dict.manualEntryBtn;
   document.getElementById('load-sample-btn-text').textContent = dict.loadSampleBtn;
+  if (elements.cancelOcrBtnText) {
+    elements.cancelOcrBtnText.textContent = dict.cancelOcrBtn || 'Skip & Enter Manually →';
+  }
   document.getElementById('ocr-notice-text').textContent = dict.ocrNotice;
   elements.ocrProgressTitle.textContent = dict.ocrProcessing;
 
@@ -484,41 +497,57 @@ async function reprocessCurrentPhoto() {
   await runOCRAndPopulate();
 }
 
+let ocrAborted = false;
+
 /**
  * In-Browser OCR & Parser Runner
  */
 async function runOCRAndPopulate() {
+  ocrAborted = false;
   elements.ocrProgressOverlay.hidden = false;
-  elements.ocrProgressBar.style.width = '15%';
+  elements.ocrProgressBar.style.width = '20%';
+  elements.ocrProgressTitle.textContent = t('ocrProcessing');
+  elements.ocrProgressStatus.textContent = 'Reading receipt lines… (tap Skip anytime)';
 
   try {
-    const ocrResult = await runReceiptOCR(
+    // 6.5s timeout prevents slow mobile connections from hanging on model download
+    const ocrPromise = runReceiptOCR(
       state.currentImageElement,
       state.rotationAngle,
       (statusText, pct) => {
+        if (ocrAborted) return;
         elements.ocrProgressStatus.textContent = statusText;
-        if (pct) elements.ocrProgressBar.style.width = `${pct}%`;
+        if (pct) elements.ocrProgressBar.style.width = `${Math.max(20, pct)}%`;
       }
     );
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('TIMEOUT')), 6500)
+    );
+
+    const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
+
+    if (ocrAborted) return;
 
     elements.ocrProgressBar.style.width = '100%';
     setTimeout(() => {
       elements.ocrProgressOverlay.hidden = true;
-    }, 400);
+    }, 250);
 
-    if (ocrResult.success && ocrResult.parsed) {
+    if (ocrResult && ocrResult.success && ocrResult.parsed) {
       populateConfirmFields(ocrResult.parsed);
       switchTab('confirm');
       showToast('Receipt parsed! Please confirm the numbers.');
     } else {
       switchTab('confirm');
-      showToast('Could not auto-read text clearly. Please enter numbers by hand.');
+      showToast('Receipt photo loaded! Please check and type numbers on the right.');
     }
   } catch (err) {
-    console.error('OCR Process failed:', err);
+    if (ocrAborted) return;
+    console.warn('OCR timed out or failed:', err);
     elements.ocrProgressOverlay.hidden = true;
     switchTab('confirm');
-    showToast('Reading error. Please type the numbers into the boxes.');
+    showToast('Receipt photo ready! Enter or confirm the numbers from the photo.');
   }
 }
 
@@ -637,7 +666,14 @@ function loadSampleReceipt() {
   state.rotationAngle = 0;
 
   loadPhotoIntoPreview(dataUrl, () => {
-    runOCRAndPopulate();
+    // Populate sample receipt numbers immediately so users can test with 0 wait
+    populateConfirmFields({
+      od: { sph: -1.75, cyl: -0.50, ax: 85, pps: 4.5 },
+      os: { sph: -2.25, cyl: -0.75, ax: 95, pps: 4.8 },
+      pd: 63.0
+    });
+    switchTab('confirm');
+    showToast('Sample receipt loaded! Review numbers and tap View Results.');
   });
 }
 

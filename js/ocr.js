@@ -19,22 +19,29 @@ export async function getTesseractWorker(onProgress) {
     throw new Error('Tesseract.js library is not loaded.');
   }
 
+  // Use fast reliable CDN mirror for language model to avoid slow github/naptha downloads
   const worker = await Tesseract.createWorker('eng', 1, {
+    langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0',
     logger: m => {
       if (onProgress && m.status === 'recognizing text') {
         const pct = Math.round((m.progress || 0) * 100);
         onProgress(`Reading receipt text: ${pct}%`, pct);
       } else if (onProgress && m.status) {
-        onProgress(`Preparing OCR: ${m.status}…`, 10);
+        const cleanStatus = m.status.replace(/_/g, ' ');
+        onProgress(`${cleanStatus}…`, 30);
       }
     }
   });
 
   // Optimize Tesseract parameters for receipts: numbers, signs, periods, table markers
-  await worker.setParameters({
-    tessedit_char_whitelist: '0123456789+-.,*#<>[]():/RDLSPOXAVEMNDKFPPSrldsphcylaxavemm ',
-    tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT || '11'
-  });
+  try {
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789+-.,*#<>[]():/RDLSPOXAVEMNDKFPPSrldsphcylaxavemm ',
+      tessedit_pageseg_mode: (Tesseract.PSM && Tesseract.PSM.SPARSE_TEXT) ? Tesseract.PSM.SPARSE_TEXT : '11'
+    });
+  } catch (e) {
+    console.warn('Parameter set warning:', e);
+  }
 
   tesseractWorker = worker;
   return tesseractWorker;
