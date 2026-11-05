@@ -77,6 +77,11 @@ const elements = {
   btnRotateLeft: document.getElementById('btn-rotate-left'),
   btnRotateRight: document.getElementById('btn-rotate-right'),
   btnRescan: document.getElementById('btn-rescan'),
+  btnAutoDetectOcr: document.getElementById('btn-auto-detect-ocr'),
+  btnAutoDetectText: document.getElementById('btn-auto-detect-text'),
+  ocrInlineStatus: document.getElementById('ocr-inline-status'),
+  ocrInlineMsg: document.getElementById('ocr-inline-msg'),
+  photoHintText: document.getElementById('photo-hint-text'),
   btnBackUpload: document.getElementById('btn-back-upload'),
   refractionForm: document.getElementById('refraction-form'),
 
@@ -241,10 +246,13 @@ function setupEventListeners() {
     showToast('Skipped reading. Please check the photo and enter numbers.');
   });
 
-  // Rotation Controls
+  // Rotation & Auto-Detect Controls
   elements.btnRotateLeft.addEventListener('click', () => rotatePreview(-90));
   elements.btnRotateRight.addEventListener('click', () => rotatePreview(90));
-  elements.btnRescan.addEventListener('click', () => reprocessCurrentPhoto());
+  elements.btnRescan.addEventListener('click', () => triggerAutoDetectOCR());
+  if (elements.btnAutoDetectOcr) {
+    elements.btnAutoDetectOcr.addEventListener('click', () => triggerAutoDetectOCR());
+  }
 
   elements.btnBackUpload.addEventListener('click', () => switchTab('scan'));
 
@@ -378,6 +386,12 @@ function updateUILanguage() {
   document.getElementById('confirm-desc').textContent = dict.confirmDesc;
   document.getElementById('receipt-preview-title').textContent = dict.receiptPreviewTitle;
   document.getElementById('receipt-preview-empty').textContent = dict.receiptPreviewEmpty;
+  if (elements.btnAutoDetectText) {
+    elements.btnAutoDetectText.textContent = dict.autoDetectBtn;
+  }
+  if (elements.photoHintText) {
+    elements.photoHintText.textContent = dict.photoHint;
+  }
   document.getElementById('participant-info-title').textContent = dict.participantInfoTitle;
   document.getElementById('participant-code-label').textContent = dict.participantCodeLabel;
   document.getElementById('participant-code-help').textContent = dict.participantCodeHelp;
@@ -464,7 +478,10 @@ async function processImageFile(file) {
     state.currentPhotoUrl = event.target.result;
     state.rotationAngle = 0;
     loadPhotoIntoPreview(state.currentPhotoUrl, () => {
-      runOCRAndPopulate();
+      // User requested: "take photo first, then enter"
+      // Immediately switch to the confirm screen with the photo visible side-by-side!
+      switchTab('confirm');
+      showToast('Photo loaded! Enter numbers directly, or tap Auto-Detect.');
     });
   };
   reader.readAsDataURL(file);
@@ -494,65 +511,51 @@ function updatePreviewTransform() {
   }
 }
 
-async function reprocessCurrentPhoto() {
-  if (!state.currentImageElement) {
-    showToast('No receipt photo loaded to re-read.');
-    return;
-  }
-  await runOCRAndPopulate();
-}
-
-let ocrAborted = false;
+let isScanning = false;
 
 /**
- * In-Browser OCR & Parser Runner
+ * On-Demand Optical Character Recognition Runner
+ * Runs only when user explicitly taps "⚡ Auto-Detect Numbers from Photo"
  */
-async function runOCRAndPopulate() {
-  ocrAborted = false;
-  elements.ocrProgressOverlay.hidden = false;
-  elements.ocrProgressBar.style.width = '15%';
-  elements.ocrProgressTitle.textContent = t('ocrProcessing');
-  elements.ocrProgressStatus.textContent = 'Reading receipt lines… (tap Skip anytime)';
+async function triggerAutoDetectOCR() {
+  if (isScanning) return;
+  if (!state.currentImageElement) {
+    showToast('No receipt photo loaded to scan.');
+    return;
+  }
+
+  isScanning = true;
+  if (elements.btnAutoDetectOcr) elements.btnAutoDetectOcr.disabled = true;
+  if (elements.ocrInlineStatus) elements.ocrInlineStatus.hidden = false;
+  if (elements.ocrInlineMsg) elements.ocrInlineMsg.textContent = t('autoDetectScanning');
+  if (elements.btnAutoDetectText) elements.btnAutoDetectText.textContent = t('autoDetectScanning');
 
   try {
-    // 25s timeout allows full optical model download on mobile connections
-    const ocrPromise = runReceiptOCR(
+    const ocrResult = await runReceiptOCR(
       state.currentImageElement,
       state.rotationAngle,
       (statusText, pct) => {
-        if (ocrAborted) return;
-        elements.ocrProgressStatus.textContent = statusText;
-        if (pct) elements.ocrProgressBar.style.width = `${Math.max(15, Math.min(100, pct))}%`;
+        if (elements.ocrInlineMsg) elements.ocrInlineMsg.textContent = `${statusText} (${pct}%)`;
       }
     );
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('TIMEOUT')), 25000)
-    );
-
-    const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
-
-    if (ocrAborted) return;
-
-    elements.ocrProgressBar.style.width = '100%';
-    setTimeout(() => {
-      elements.ocrProgressOverlay.hidden = true;
-    }, 250);
-
-    if (ocrResult && ocrResult.success && ocrResult.parsed) {
+    if (ocrResult && ocrResult.success && ocrResult.parsed && 
+        (ocrResult.parsed.od.sph !== null || ocrResult.parsed.os.sph !== null || ocrResult.parsed.pd !== null)) {
       populateConfirmFields(ocrResult.parsed);
-      switchTab('confirm');
-      showToast('Receipt parsed! Please confirm the numbers.');
+      if (elements.btnAutoDetectText) elements.btnAutoDetectText.textContent = '✓ Re-scan Photo Numbers';
+      showToast(t('autoDetectSuccess'));
     } else {
-      switchTab('confirm');
-      showToast('Receipt photo loaded! Please check and type numbers on the right.');
+      if (elements.btnAutoDetectText) elements.btnAutoDetectText.textContent = t('autoDetectBtn');
+      showToast(t('autoDetectFailed'));
     }
   } catch (err) {
-    if (ocrAborted) return;
-    console.warn('OCR processing notice:', err);
-    elements.ocrProgressOverlay.hidden = true;
-    switchTab('confirm');
-    showToast('Receipt photo ready! Enter or confirm the numbers from the photo.');
+    console.warn('Auto-detect notice:', err);
+    if (elements.btnAutoDetectText) elements.btnAutoDetectText.textContent = t('autoDetectBtn');
+    showToast(t('autoDetectFailed'));
+  } finally {
+    isScanning = false;
+    if (elements.btnAutoDetectOcr) elements.btnAutoDetectOcr.disabled = false;
+    if (elements.ocrInlineStatus) elements.ocrInlineStatus.hidden = true;
   }
 }
 

@@ -131,11 +131,11 @@ export function preprocessReceiptImage(imgElement, rotationAngle = 0) {
   const origWidth = imgElement.naturalWidth || imgElement.width || 800;
   const origHeight = imgElement.naturalHeight || imgElement.height || 1000;
 
-  // Scale image to optimal OCR dimensions (1000px - 1400px max for speed + precision)
+  // Scale image to optimal OCR dimensions (700px - 1000px max for speed + mobile memory)
   const maxDim = Math.max(origWidth, origHeight);
   let scale = 1.0;
-  if (maxDim < 1000) scale = 1000 / maxDim;
-  else if (maxDim > 1400) scale = 1400 / maxDim;
+  if (maxDim < 700) scale = 700 / maxDim;
+  else if (maxDim > 1000) scale = 1000 / maxDim;
 
   const width = Math.round(origWidth * scale);
   const height = Math.round(origHeight * scale);
@@ -238,7 +238,15 @@ export async function runReceiptOCR(imgElement, rotationAngle = 0, onProgress) {
     const worker = await getTesseractWorker(onProgress);
 
     if (onProgress) onProgress('Analyzing receipt lines…', 70);
-    const { data: { text } } = await worker.recognize(processedCanvas);
+    // Convert to compressed JPEG data URL for fast transfer to Web Worker
+    const jpegUrl = processedCanvas.toDataURL('image/jpeg', 0.85);
+
+    const recognizePromise = worker.recognize(jpegUrl);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Recognition timed out')), 12000)
+    );
+
+    const { data: { text } } = await Promise.race([recognizePromise, timeoutPromise]);
 
     if (onProgress) onProgress('Parsing prescription numbers…', 95);
     const parsed = parseReceiptText(text);
@@ -248,7 +256,7 @@ export async function runReceiptOCR(imgElement, rotationAngle = 0, onProgress) {
       parsed,
       rawText: text,
       engine: 'tesseract_local',
-      processedCanvasUrl: processedCanvas.toDataURL('image/png')
+      processedCanvasUrl: jpegUrl
     };
   } catch (err) {
     console.error('OCR Processing error:', err);
