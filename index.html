@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eye Result Reader — Autorefractometer Printout Interpreter</title>
+  <meta name="description" content="In-browser private reader for autorefractometer printout slips with bilingual English/Bisaya explanations, visual scales, and instant Excel export.">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Vendor libraries: SheetJS for Excel export & Tesseract for OCR -->
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/tesseract.min.js"></script>
+</head>
+<body>
+  <!-- Persistent Disclaimer Bar (Top of Every Screen) -->
+  <div class="disclaimer-bar" role="region" aria-label="Clinical Disclaimer Notice">
+    <div class="disclaimer-bar-content">
+      <svg class="icon icon-alert" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <span id="disclaimer-bar-text">Screening interpretation only. This is not a medical diagnosis or prescription.</span>
+    </div>
+  </div>
+
+  <!-- App Header -->
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand-group">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </div>
+        <div>
+          <h1 id="app-title" class="brand-title">Eye Result Reader</h1>
+          <p id="app-subtitle" class="brand-subtitle">Autorefractometer Printout Interpreter</p>
+        </div>
+      </div>
+
+      <div class="header-controls">
+        <div class="privacy-badge" title="No photos leave your browser" aria-label="Privacy notice: photo is processed locally">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <span id="privacy-badge-text">100% On-Device Privacy</span>
+        </div>
+
+        <!-- Language Switcher -->
+        <button type="button" id="lang-toggle-btn" class="btn btn-secondary btn-sm" aria-label="Switch Language to Bisaya">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+          <span id="lang-btn-text">Bisaya</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <nav class="app-nav" aria-label="Application sections">
+      <ul class="nav-list" role="tablist">
+        <li role="presentation">
+          <button type="button" role="tab" id="tab-scan" class="nav-tab active" aria-selected="true" aria-controls="view-scan">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+            <span id="nav-scan-text">Scan / Enter</span>
+          </button>
+        </li>
+        <li role="presentation">
+          <button type="button" role="tab" id="tab-confirm" class="nav-tab" aria-selected="false" aria-controls="view-confirm">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <span id="nav-confirm-text">Confirm Numbers</span>
+          </button>
+        </li>
+        <li role="presentation">
+          <button type="button" role="tab" id="tab-results" class="nav-tab" aria-selected="false" aria-controls="view-results">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <span id="nav-results-text">Results</span>
+          </button>
+        </li>
+        <li role="presentation">
+          <button type="button" role="tab" id="tab-records" class="nav-tab" aria-selected="false" aria-controls="view-records">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+              <polyline points="10 2 10 10 13 7 16 10 16 2"></polyline>
+            </svg>
+            <span id="nav-records-text">Saved Records</span>
+            <span id="records-badge" class="badge">0</span>
+          </button>
+        </li>
+        <li role="presentation">
+          <button type="button" role="tab" id="tab-export" class="nav-tab" aria-selected="false" aria-controls="view-export">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span id="nav-export-text">Excel & Data</span>
+          </button>
+        </li>
+      </ul>
+    </nav>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-content" id="main-content">
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 1: UPLOAD / SNAP / MANUAL INPUT                                  -->
+    <!-- ===================================================================== -->
+    <section id="view-scan" class="view-panel active" role="tabpanel" aria-labelledby="tab-scan">
+      <div class="hero-block">
+        <h2 id="hero-title" class="hero-heading">Read Your Autorefractometer Printout</h2>
+        <p id="hero-desc" class="hero-subheading">
+          Upload or take a photo of your receipt printout. The text is read directly in your browser. Or type the numbers manually.
+        </p>
+      </div>
+
+      <!-- Upload Zone Card -->
+      <div class="upload-card">
+        <div class="upload-dropzone" id="dropzone" tabindex="0" role="button" aria-label="Drop receipt image or click to select">
+          <input type="file" id="file-input" accept="image/*" class="sr-only" aria-label="Upload receipt image file">
+          <input type="file" id="camera-input" accept="image/*" capture="environment" class="sr-only" aria-label="Take receipt photo with camera">
+
+          <div class="dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+              <path d="M12 12v9"></path>
+              <path d="m16 16-4-4-4 4"></path>
+            </svg>
+          </div>
+          <h3 id="upload-zone-title" class="dropzone-title">Snap or Select Printout</h3>
+          <p id="upload-zone-prompt" class="dropzone-subtitle">Drag and drop a photo here, or click to choose from camera / gallery</p>
+
+          <div class="upload-buttons-row">
+            <button type="button" id="btn-camera" class="btn btn-primary">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="4"></circle>
+              </svg>
+              <span id="upload-camera-btn-text">Take Photo with Camera</span>
+            </button>
+            <button type="button" id="btn-browse" class="btn btn-secondary">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
+                <circle cx="9" cy="9" r="2"></circle>
+                <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+              </svg>
+              <span id="upload-file-btn-text">Choose Image File</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Fast Fallbacks & Testing Row -->
+        <div class="upload-footer-actions">
+          <button type="button" id="btn-manual-entry" class="btn btn-outline">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 20h9"></path>
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+            </svg>
+            <span id="manual-entry-btn-text">Enter Numbers Manually</span>
+          </button>
+          <button type="button" id="btn-sample-receipt" class="btn btn-ghost">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <span id="load-sample-btn-text">Try Sample Receipt</span>
+          </button>
+        </div>
+
+        <!-- Practical Guidance Notice -->
+        <div class="info-callout">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          <p id="ocr-notice-text">Tips for best reading: Ensure the printout is upright, flat, and well-lit. Avoid tilted angles. The confirm screen lets you check and adjust every number.</p>
+        </div>
+      </div>
+
+      <!-- OCR Progress Modal / Overlay -->
+      <div id="ocr-progress-overlay" class="progress-overlay" hidden aria-live="polite">
+        <div class="progress-card">
+          <div class="spinner" aria-hidden="true"></div>
+          <h3 id="ocr-progress-title">Reading printout on this device…</h3>
+          <p id="ocr-progress-status">Analyzing lines and optical numbers…</p>
+          <div class="progress-bar-container">
+            <div id="ocr-progress-bar" class="progress-bar-fill" style="width: 15%;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 2: CONFIRM & EDIT SCREEN                                         -->
+    <!-- ===================================================================== -->
+    <section id="view-confirm" class="view-panel" role="tabpanel" aria-labelledby="tab-confirm" hidden>
+      <div class="section-header">
+        <h2 id="confirm-title" class="section-title">Confirm Extracted Numbers</h2>
+        <p id="confirm-desc" class="section-desc">Review the numbers against your receipt photo on the left. Tap any box to correct errors.</p>
+      </div>
+
+      <!-- Split Layout: Photo Preview (Left) + Editable Form (Right) -->
+      <div class="confirm-split-layout">
+        <!-- Photo Preview Panel -->
+        <div class="photo-viewer-card">
+          <div class="photo-viewer-toolbar">
+            <span id="receipt-preview-title" class="photo-title">Receipt Photo</span>
+            <div class="viewer-actions">
+              <button type="button" id="btn-rotate-left" class="btn-icon" aria-label="Rotate Left">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                  <path d="M3 3v5h5"></path>
+                </svg>
+              </button>
+              <button type="button" id="btn-rotate-right" class="btn-icon" aria-label="Rotate Right">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.85.99 6.57 2.6L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                </svg>
+              </button>
+              <button type="button" id="btn-rescan" class="btn-icon" aria-label="Re-run OCR with current rotation" title="Re-read text">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="photo-canvas-container" id="photo-container">
+            <img id="preview-image" src="" alt="Autorefractometer receipt preview" class="preview-img" hidden>
+            <div id="preview-empty" class="preview-empty-state">
+              <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
+                <circle cx="9" cy="9" r="2"></circle>
+                <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+              </svg>
+              <p id="receipt-preview-empty">No photo uploaded (Manual entry mode)</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Editable Fields Form -->
+        <div class="confirm-form-card">
+          <form id="refraction-form" novalidate>
+            <!-- Participant Metadata Group -->
+            <fieldset class="form-fieldset">
+              <legend id="participant-info-title">Participant Information</legend>
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="input-code" id="participant-code-label">Participant Code</label>
+                  <input type="text" id="input-code" class="form-input" placeholder="e.g. EE-261105-001" required autocomplete="off">
+                  <span id="participant-code-help" class="form-help">Anonymous ID</span>
+                </div>
+                <div class="form-group">
+                  <label for="input-site" id="site-location-label">Site / Location</label>
+                  <input type="text" id="input-site" class="form-input" placeholder="e.g. RHU Sumilao" autocomplete="off">
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- Right Eye (OD) Group -->
+            <fieldset class="form-fieldset">
+              <legend id="right-eye-title" class="legend-od">Right Eye (OD / Oculi Dextra)</legend>
+              <div class="form-grid-4">
+                <div class="form-group">
+                  <label for="od-sph" id="field-od-sph">SPH (Sphere)</label>
+                  <div class="stepper-input">
+                    <input type="number" id="od-sph" step="0.25" placeholder="-2.25" class="form-input num-input">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="od-cyl" id="field-od-cyl">CYL (Cylinder)</label>
+                  <div class="stepper-input">
+                    <input type="number" id="od-cyl" step="0.25" placeholder="-0.50" class="form-input num-input">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="od-ax" id="field-od-ax">AX (Axis °)</label>
+                  <input type="number" id="od-ax" min="1" max="180" placeholder="85" class="form-input num-input">
+                </div>
+                <div class="form-group">
+                  <label for="od-pps" id="field-od-pps">PPS / PS (mm)</label>
+                  <input type="number" id="od-pps" step="0.1" placeholder="4.5" class="form-input num-input">
+                </div>
+              </div>
+              <div class="live-se-badge" id="live-se-od-container">
+                <span id="live-se-od-label">OD Spherical Equiv:</span>
+                <strong id="live-se-od-val">—</strong>
+              </div>
+            </fieldset>
+
+            <!-- Left Eye (OS) Group -->
+            <fieldset class="form-fieldset">
+              <legend id="left-eye-title" class="legend-os">Left Eye (OS / Oculi Sinistra)</legend>
+              <div class="form-grid-4">
+                <div class="form-group">
+                  <label for="os-sph" id="field-os-sph">SPH (Sphere)</label>
+                  <div class="stepper-input">
+                    <input type="number" id="os-sph" step="0.25" placeholder="-2.50" class="form-input num-input">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="os-cyl" id="field-os-cyl">CYL (Cylinder)</label>
+                  <div class="stepper-input">
+                    <input type="number" id="os-cyl" step="0.25" placeholder="-0.75" class="form-input num-input">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="os-ax" id="field-os-ax">AX (Axis °)</label>
+                  <input type="number" id="os-ax" min="1" max="180" placeholder="95" class="form-input num-input">
+                </div>
+                <div class="form-group">
+                  <label for="os-pps" id="field-os-pps">PPS / PS (mm)</label>
+                  <input type="number" id="os-pps" step="0.1" placeholder="4.8" class="form-input num-input">
+                </div>
+              </div>
+              <div class="live-se-badge" id="live-se-os-container">
+                <span id="live-se-os-label">OS Spherical Equiv:</span>
+                <strong id="live-se-os-val">—</strong>
+              </div>
+            </fieldset>
+
+            <!-- Shared Measurements (PD) -->
+            <fieldset class="form-fieldset">
+              <legend id="shared-title">Shared Measurements</legend>
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="input-pd" id="field-pd">PD (Pupillary Distance, mm)</label>
+                  <input type="number" id="input-pd" step="0.5" placeholder="63.0" class="form-input num-input">
+                  <span id="field-pd-help" class="form-help">Normal adult range: 54 to 72 mm</span>
+                </div>
+                <div class="form-group">
+                  <label for="input-notes">Notes / Observations (Optional)</label>
+                  <input type="text" id="input-notes" class="form-input" placeholder="e.g. squinting, wearing contacts">
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- Form Action Buttons -->
+            <div class="form-actions-row">
+              <button type="submit" id="btn-submit-form" class="btn btn-primary btn-lg">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span id="calculate-btn-text">View Results & Interpret</span>
+              </button>
+              <button type="button" id="btn-back-upload" class="btn btn-secondary">
+                <span id="back-to-upload-btn-text">Upload New Photo</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 3: RESULTS SCREEN                                                -->
+    <!-- ===================================================================== -->
+    <section id="view-results" class="view-panel" role="tabpanel" aria-labelledby="tab-results" hidden>
+      <div class="results-header-block">
+        <div>
+          <h2 id="results-title" class="section-title">Screening Interpretation</h2>
+          <p id="results-subtitle" class="section-desc">Summary of optical findings for both eyes</p>
+        </div>
+        <div class="results-participant-tag">
+          <span class="tag-label">Participant:</span>
+          <strong id="res-participant-code">EE-000000-000</strong>
+        </div>
+      </div>
+
+      <!-- Referral Status Banner -->
+      <div id="referral-banner" class="referral-banner banner-amber" role="status">
+        <div class="banner-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+        </div>
+        <div class="banner-text-block">
+          <h3 id="referral-banner-title">REFERRAL RECOMMENDED</h3>
+          <p id="referral-banner-desc">One or both eyes are outside the normal range (−0.50 D to +0.50 D). See an optometrist or ophthalmologist for a comprehensive eye exam.</p>
+        </div>
+      </div>
+
+      <!-- Anisometropia Note (Visible if diff >= 1.00 D) -->
+      <div id="anisometropia-card" class="anisometropia-box" hidden>
+        <div class="aniso-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </div>
+        <div>
+          <h4 id="aniso-title" class="aniso-heading">Notice: Difference Between Eyes (Anisometropia)</h4>
+          <p id="aniso-msg" class="aniso-text">There is a difference of 1.00 D or more between your right and left eyes.</p>
+        </div>
+      </div>
+
+      <!-- Eye Result Cards Grid -->
+      <div class="results-cards-grid">
+        <!-- Right Eye Card -->
+        <article class="eye-card" id="card-od">
+          <div class="eye-card-header">
+            <div>
+              <span class="eye-badge od-badge">OD</span>
+              <h3 id="od-card-title" class="eye-card-title">Right Eye (OD)</h3>
+            </div>
+            <span id="od-color-indicator" class="status-pill pill-amber">Mild</span>
+          </div>
+
+          <!-- Color Bar -->
+          <div id="od-color-bar" class="condition-color-bar bar-amber" aria-hidden="true"></div>
+
+          <!-- Headline & Plain Explanation -->
+          <div class="eye-finding-block">
+            <h4 id="od-headline" class="finding-headline">Mild Nearsightedness (Myopia)</h4>
+            <p id="od-explanation" class="finding-explanation">You can see close objects clearly, but objects in the distance may look slightly soft or blurred.</p>
+            <p id="od-astigmatism-note" class="astigmatism-note" hidden></p>
+          </div>
+
+          <!-- Visual Diopter Scale with Pin Indicator -->
+          <div class="scale-widget" aria-label="Right eye refractive scale">
+            <div class="scale-labels-top">
+              <span class="scale-lbl-left" id="scale-lbl-near-od">Nearsighted</span>
+              <span class="scale-lbl-center" id="scale-lbl-clear-od">Clear</span>
+              <span class="scale-lbl-right" id="scale-lbl-far-od">Farsighted</span>
+            </div>
+            <div class="scale-track-wrapper">
+              <div class="scale-track">
+                <div class="scale-seg seg-orange" title="Strong Nearsighted"></div>
+                <div class="scale-seg seg-amber" title="Mild/Mod Nearsighted"></div>
+                <div class="scale-seg seg-green" title="Clear / Normal"></div>
+                <div class="scale-seg seg-amber" title="Mild Farsighted"></div>
+                <div class="scale-seg seg-orange" title="Strong Farsighted"></div>
+              </div>
+              <!-- Pin Marker -->
+              <div class="scale-pin" id="od-scale-pin" style="left: 45%;">
+                <div class="pin-badge" id="od-pin-badge">-2.25 D</div>
+                <div class="pin-marker" aria-hidden="true"></div>
+              </div>
+            </div>
+            <div class="scale-ticks">
+              <span>-6D</span>
+              <span>-3D</span>
+              <span>0D</span>
+              <span>+3D</span>
+              <span>+6D</span>
+            </div>
+          </div>
+
+          <!-- Numerical Metrics Table -->
+          <div class="metrics-grid">
+            <div class="metric-cell">
+              <span class="metric-label">SPH</span>
+              <strong class="metric-value" id="od-val-sph">—</strong>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-label">CYL</span>
+              <strong class="metric-value" id="od-val-cyl">—</strong>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-label">AX</span>
+              <strong class="metric-value" id="od-val-ax">—</strong>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-label">PPS</span>
+              <strong class="metric-value" id="od-val-pps">—</strong>
+            </div>
+            <div class="metric-cell metric-cell-se">
+              <span class="metric-label" id="od-se-label">SE (Spherical Equiv)</span>
+              <strong class="metric-value highlight" id="od-val-se">—</strong>
+            </div>
+          </div>
+        </article>
+
+        <!-- Left Eye Card -->
+        <article class="eye-card" id="card-os">
+          <div class="eye-card-header">
+            <div>
+              <span class="eye-badge os-badge">OS</span>
+              <h3 id="os-card-title" class="eye-card-title">Left Eye (OS)</h3>
+            </div>
+            <span id="os-color-indicator" class="status-pill pill-amber">Mild</span>
+          </div>
+
+          <!-- Color Bar -->
+          <div id="os-color-bar" class="condition-color-bar bar-amber" aria-hidden="true"></div>
+
+          <!-- Headline & Plain Explanation -->
+          <div class="eye-finding-block">
+            <h4 id="os-headline" class="finding-headline">Mild Nearsightedness (Myopia)</h4>
+            <p id="os-explanation" class="finding-explanation">You can see close objects clearly, but objects in the distance may look slightly soft or blurred.</p>
+            <p id="os-astigmatism-note" class="astigmatism-note" hidden></p>
+          </div>
+
+          <!-- Visual Diopter Scale with Pin Indicator -->
+          <div class="scale-widget" aria-label="Left eye refractive scale">
+            <div class="scale-labels-top">
+              <span class="scale-lbl-left" id="scale-lbl-near-os">Nearsighted</span>
+              <span class="scale-lbl-center" id="scale-lbl-clear-os">Clear</span>
+              <span class="scale-lbl-right" id="scale-lbl-far-os">Farsighted</span>
+            </div>
+            <div class="scale-track-wrapper">
+              <div class="scale-track">
+                <div class="scale-seg seg-orange" title="Strong Nearsighted"></div>
+                <div class="scale-seg seg-amber" title="Mild/Mod Nearsighted"></div>
+                <div class="scale-seg seg-green" title="Clear / Normal"></div>
+                <div class="scale-seg seg-amber" title="Mild Farsighted"></div>
+                <div class="scale-seg seg-orange" title="Strong Farsighted"></div>
+              </div>
+              <!-- Pin Marker -->
+              <div class="scale-pin" id="os-scale-pin" style="left: 42%;">
+                <div class="pin-badge" id="os-pin-badge">-2.63 D</div>
+                <div class="pin-marker" aria-hidden="true"></div>
+              </div>
+            </div>
+            <div class="scale-ticks">
+              <span>-6D</span>
+              <span>-3D</span>
+              <span>0D</span>
+              <span>+3D</span>
+              <span>+6D</span>
+            </div>
+          </div>
+
+          <!-- Numerical Metrics Table -->
+          <div class="metrics-grid">
+            <div class="metric-cell">
+              <span class="metric-label">SPH</span>
+              <strong class="metric-value" id="os-val-sph">—</strong>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-label">CYL</span>
+              <strong class="metric-value" id="os-val-cyl">—</strong>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-label">AX</span>
+              <strong class="metric-value" id="os-val-ax">—</strong>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-label">PPS</span>
+              <strong class="metric-value" id="os-val-pps">—</strong>
+            </div>
+            <div class="metric-cell metric-cell-se">
+              <span class="metric-label" id="os-se-label">SE (Spherical Equiv)</span>
+              <strong class="metric-value highlight" id="os-val-se">—</strong>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <!-- Next Step Callout -->
+      <div class="next-step-card">
+        <div class="next-step-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </div>
+        <div>
+          <h4 id="next-step-title" class="next-step-heading">Next Step</h4>
+          <p id="next-step-action" class="next-step-text">Please visit a licensed eye doctor (optometrist or ophthalmologist) for a comprehensive clinical refraction and prescription.</p>
+        </div>
+      </div>
+
+      <!-- Tap-to-Explain Terms (Interactive Glossary) -->
+      <section class="glossary-section" aria-label="Interactive terms glossary">
+        <h4 id="glossary-title" class="glossary-heading">Tap-to-Explain Optical Terms</h4>
+        <p id="glossary-intro" class="glossary-sub">Tap any term badge below to read what it measures in everyday language:</p>
+        <div class="term-chips-row">
+          <button type="button" class="term-chip" data-term="sph">
+            <strong>SPH</strong> (Sphere)
+          </button>
+          <button type="button" class="term-chip" data-term="cyl">
+            <strong>CYL</strong> (Cylinder)
+          </button>
+          <button type="button" class="term-chip" data-term="ax">
+            <strong>AX</strong> (Axis)
+          </button>
+          <button type="button" class="term-chip" data-term="pps">
+            <strong>PPS</strong> (Pupil Size)
+          </button>
+          <button type="button" class="term-chip" data-term="pd">
+            <strong>PD</strong> (Pupil Distance)
+          </button>
+          <button type="button" class="term-chip" data-term="se">
+            <strong>SE</strong> (Spherical Equiv)
+          </button>
+        </div>
+      </section>
+
+      <!-- Full Clinical Disclaimer at End of Results -->
+      <div class="full-disclaimer-card" role="note">
+        <h4 id="disclaimer-full-title" class="full-disclaimer-title">Important Clinical Disclaimer</h4>
+        <p id="disclaimer-full-text" class="full-disclaimer-body">
+          This web application is an educational screening and interpretation tool designed to help community participants understand numbers printed by an automated autorefractometer. It is NOT an official diagnosis, medical opinion, or spectacle prescription. Eye health involves corneal curvature, intraocular pressure, retinal wellness, and subjective visual comfort. Never purchase eyeglasses solely based on automated screening numbers without an examination by a certified optometrist or ophthalmologist.
+        </p>
+      </div>
+
+      <!-- Action Buttons Row -->
+      <div class="results-actions-bar">
+        <button type="button" id="btn-save-record" class="btn btn-primary btn-lg">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          <span id="save-record-btn-text">Save Record to Database</span>
+        </button>
+        <button type="button" id="btn-edit-again" class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+          <span id="edit-again-btn-text">Edit Numbers</span>
+        </button>
+        <button type="button" id="btn-new-scan" class="btn btn-outline">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span id="new-scan-btn-text">New Screening</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 4: SAVED RECORDS LOG                                             -->
+    <!-- ===================================================================== -->
+    <section id="view-records" class="view-panel" role="tabpanel" aria-labelledby="tab-records" hidden>
+      <div class="section-header">
+        <h2 id="records-table-title" class="section-title">Saved Participant Records</h2>
+        <p class="section-desc">Local database log of all completed participant screenings</p>
+      </div>
+
+      <!-- Filter & Quick Export Row -->
+      <div class="records-filter-bar">
+        <div class="search-box">
+          <input type="text" id="records-search" class="form-input" placeholder="Search by participant code…" autocomplete="off">
+        </div>
+        <div class="quick-export-btns">
+          <button type="button" id="btn-records-export-excel" class="btn btn-primary btn-sm">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>Export Excel</span>
+          </button>
+          <button type="button" id="btn-records-copy-tsv" class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+            </svg>
+            <span>Copy for Sheets</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Table Container -->
+      <div class="table-container">
+        <table class="data-table" id="records-table">
+          <thead>
+            <tr>
+              <th scope="col" id="col-code">Code</th>
+              <th scope="col" id="col-date">Date</th>
+              <th scope="col" id="col-site">Site</th>
+              <th scope="col" id="col-odse">OD SE</th>
+              <th scope="col" id="col-osse">OS SE</th>
+              <th scope="col" id="col-diff">Diff</th>
+              <th scope="col" id="col-referral">Referral?</th>
+              <th scope="col" id="col-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="records-table-body">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+        <div id="no-records-msg" class="empty-table-state" hidden>
+          <p id="no-records-text">No participant screenings saved yet. Complete a screening to see it here.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- VIEW 5: EXCEL & CLOUD SYNC SETTINGS                                   -->
+    <!-- ===================================================================== -->
+    <section id="view-export" class="view-panel" role="tabpanel" aria-labelledby="tab-export" hidden>
+      <div class="section-header">
+        <h2 id="export-title" class="section-title">Participant Data & Excel Export</h2>
+        <p id="export-desc" class="section-desc">Easily collect, download, or synchronize participant records for your research study or clinic log.</p>
+      </div>
+
+      <!-- Stats Card -->
+      <div class="export-stats-card">
+        <div>
+          <span id="total-records-label" class="stats-label">Total Screenings Saved:</span>
+          <strong id="export-records-count" class="stats-number">0</strong>
+        </div>
+        <div class="stats-actions">
+          <button type="button" id="btn-export-excel" class="btn btn-primary">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span id="download-excel-btn-text">Download Excel (.xlsx)</span>
+          </button>
+          <button type="button" id="btn-export-csv" class="btn btn-secondary">
+            <span id="download-csv-btn-text">Download CSV File</span>
+          </button>
+          <button type="button" id="btn-copy-tsv" class="btn btn-outline">
+            <span id="copy-tsv-btn-text">Copy for Excel / Sheets (Clipboard)</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Webhook / Google Sheets Integration -->
+      <div class="card-box">
+        <div class="card-box-header">
+          <div class="icon-circle" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+          </div>
+          <div>
+            <h3 id="webhook-section-title" class="card-box-title">Direct Google Sheets / Database Sync (Optional)</h3>
+            <p id="webhook-desc" class="card-box-desc">Automatically send every saved screening directly to your live Google Sheet or database webhook.</p>
+          </div>
+        </div>
+
+        <form id="webhook-form" class="webhook-form">
+          <div class="form-group">
+            <label for="webhook-url-input" id="webhook-url-label">Google Sheets Webhook URL</label>
+            <input type="url" id="webhook-url-input" class="form-input" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+          </div>
+          <div class="webhook-buttons">
+            <button type="submit" id="btn-save-webhook" class="btn btn-primary">
+              <span id="webhook-save-btn-text">Save Webhook URL</span>
+            </button>
+            <button type="button" id="btn-test-webhook" class="btn btn-secondary">
+              <span id="webhook-test-btn-text">Test Connection</span>
+            </button>
+            <button type="button" id="btn-show-guide" class="btn btn-ghost">
+              <span id="webhook-guide-btn-text">How to setup free Google Sheet in 1 min</span>
+            </button>
+          </div>
+          <div id="webhook-feedback" class="feedback-msg" hidden></div>
+        </form>
+
+        <!-- Collapsible 1-minute Google Sheets setup instructions -->
+        <div id="sheets-guide-box" class="guide-box" hidden>
+          <h4>Quick 1-Minute Google Sheets Setup:</h4>
+          <ol>
+            <li>Open a new blank sheet on <strong>Google Sheets</strong>.</li>
+            <li>Click <strong>Extensions &rarr; Apps Script</strong>.</li>
+            <li>Delete the default code, paste the contents of <code>google-sheets-script.js</code> from this folder, and click Save.</li>
+            <li>Click <strong>Deploy &rarr; New deployment</strong>, select <strong>Web app</strong>, set <em>Who has access</em> to <strong>Anyone</strong>, and click Deploy.</li>
+            <li>Copy the resulting Web App URL and paste it into the box above!</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- Danger Zone / Data Management -->
+      <div class="card-box danger-card">
+        <h3 class="danger-title">Data Management</h3>
+        <p class="danger-desc">All screening records are stored locally in your browser's private database. You can clear them once exported.</p>
+        <button type="button" id="btn-clear-all" class="btn btn-danger">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+          <span id="clear-all-btn-text">Clear All Records</span>
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Interactive Terms Glossary Modal -->
+  <dialog id="glossary-dialog" class="app-dialog" aria-labelledby="dialog-term-title">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3 id="dialog-term-title" class="dialog-title">Term Definition</h3>
+        <button type="button" id="dialog-close-btn" class="btn-icon" aria-label="Close dialog">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <p id="dialog-term-desc" class="dialog-desc"></p>
+      </div>
+      <div class="dialog-footer">
+        <button type="button" id="dialog-ok-btn" class="btn btn-primary">Got it</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast-notification" role="status" aria-live="polite" hidden></div>
+
+  <!-- Main Application Script (ES Module) -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

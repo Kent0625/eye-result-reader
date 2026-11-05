@@ -1,0 +1,21 @@
+{
+  "name": "eye-result-reader",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Client-side private autorefractometer printout reader with English/Bisaya explanations, visual scales, and Excel/database export.",
+  "scripts": {
+    "start": "npx serve -l 3000 ."
+  },
+  "keywords": [
+    "autorefractor",
+    "ophthalmology",
+    "optometry",
+    "screening",
+    "ocr",
+    "client-side",
+    "bisaya",
+    "excel"
+  ],
+  "author": "E-Eye Capstone Team",
+  "license": "MIT"
+}
