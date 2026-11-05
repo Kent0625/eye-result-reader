@@ -6,7 +6,7 @@
 
 import { translations } from './i18n.js';
 import { roundDiopter, formatDiopter, computeSE, classifyEye, evaluatePair, scalePercentageFromSE } from './clinical.js';
-import { runReceiptOCR, preprocessReceiptImage } from './ocr.js';
+import { runReceiptOCR, preprocessReceiptImage, warmupOCR } from './ocr.js';
 import { parseReceiptText } from './parser.js';
 import {
   initDB, saveRecord, listRecords, deleteRecord, clearAllRecords,
@@ -175,6 +175,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSavedSettings();
   await refreshRecords();
   updateUILanguage();
+  // Warm up OCR engine in background so camera captures read instantly
+  setTimeout(() => {
+    warmupOCR();
+  }, 1000);
 });
 
 /**
@@ -505,24 +509,24 @@ let ocrAborted = false;
 async function runOCRAndPopulate() {
   ocrAborted = false;
   elements.ocrProgressOverlay.hidden = false;
-  elements.ocrProgressBar.style.width = '20%';
+  elements.ocrProgressBar.style.width = '15%';
   elements.ocrProgressTitle.textContent = t('ocrProcessing');
   elements.ocrProgressStatus.textContent = 'Reading receipt lines… (tap Skip anytime)';
 
   try {
-    // 6.5s timeout prevents slow mobile connections from hanging on model download
+    // 25s timeout allows full optical model download on mobile connections
     const ocrPromise = runReceiptOCR(
       state.currentImageElement,
       state.rotationAngle,
       (statusText, pct) => {
         if (ocrAborted) return;
         elements.ocrProgressStatus.textContent = statusText;
-        if (pct) elements.ocrProgressBar.style.width = `${Math.max(20, pct)}%`;
+        if (pct) elements.ocrProgressBar.style.width = `${Math.max(15, Math.min(100, pct))}%`;
       }
     );
 
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('TIMEOUT')), 6500)
+      setTimeout(() => reject(new Error('TIMEOUT')), 25000)
     );
 
     const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
@@ -544,7 +548,7 @@ async function runOCRAndPopulate() {
     }
   } catch (err) {
     if (ocrAborted) return;
-    console.warn('OCR timed out or failed:', err);
+    console.warn('OCR processing notice:', err);
     elements.ocrProgressOverlay.hidden = true;
     switchTab('confirm');
     showToast('Receipt photo ready! Enter or confirm the numbers from the photo.');
