@@ -13,6 +13,22 @@ let tesseractWorker = null;
 let isInitializing = null;
 
 /**
+ * Checks for WebAssembly SIMD support in 0.01ms
+ */
+function detectSimdSupport() {
+  try {
+    if (typeof WebAssembly === 'object' && typeof WebAssembly.validate === 'function') {
+      return WebAssembly.validate(new Uint8Array([
+        0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 26, 11
+      ]));
+    }
+  } catch (e) {
+    // fallback
+  }
+  return false;
+}
+
+/**
  * Pre-warms the Tesseract worker in the background on page load
  */
 export function warmupOCR() {
@@ -23,7 +39,7 @@ export function warmupOCR() {
 }
 
 /**
- * Initializes or reuses Tesseract Worker using local vendor files
+ * Initializes or reuses Tesseract Worker using local vendor files with strict timeout
  */
 export async function getTesseractWorker(onProgress) {
   if (tesseractWorker) return tesseractWorker;
@@ -38,7 +54,11 @@ export async function getTesseractWorker(onProgress) {
     : '.';
 
   const workerPath = `${origin}/vendor/worker.min.js`;
-  const corePath = `${origin}/vendor`;
+  const isSimd = detectSimdSupport();
+  // Point directly to the exact wasm.js file to bypass slow runtime wasm-feature-detect
+  const corePath = isSimd
+    ? `${origin}/vendor/tesseract-core-simd-lstm.wasm.js`
+    : `${origin}/vendor/tesseract-core-lstm.wasm.js`;
   const langPath = `${origin}/vendor`;
 
   const logger = m => {
@@ -51,7 +71,7 @@ export async function getTesseractWorker(onProgress) {
     } else if (st === 'initializing tesseract') {
       onProgress('Initializing engine…', 32);
     } else if (st === 'loading language traineddata') {
-      onProgress(`Loading receipt optical model: ${Math.round(prog * 100)}%`, Math.round(35 + prog * 25));
+      onProgress(`Loading receipt model: ${Math.round(prog * 100)}%`, Math.round(35 + prog * 25));
     } else if (st === 'initializing api') {
       onProgress('Preparing optical analyzer…', 65);
     } else if (st === 'recognizing text') {
@@ -65,8 +85,8 @@ export async function getTesseractWorker(onProgress) {
 
   isInitializing = (async () => {
     try {
-      // Primary: Local vendor files from same origin (fastest, 100% offline-ready)
-      const worker = await Tesseract.createWorker('eng', 1, {
+      // Primary: Local vendor files with 7-second hard timeout
+      const localPromise = Tesseract.createWorker('eng', 1, {
         workerPath,
         corePath,
         langPath,
@@ -74,6 +94,12 @@ export async function getTesseractWorker(onProgress) {
         gzip: true,
         logger
       });
+
+      const localTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Local worker timeout')), 7000)
+      );
+
+      const worker = await Promise.race([localPromise, localTimeout]);
 
       try {
         await worker.setParameters({
@@ -88,14 +114,20 @@ export async function getTesseractWorker(onProgress) {
       return tesseractWorker;
     } catch (localErr) {
       console.warn('Local worker initialization issue, trying CDN fallback mirror:', localErr);
-      
-      // Fallback: Public CDN mirror
-      const worker = await Tesseract.createWorker('eng', 1, {
+
+      // Fallback: Public CDN mirror with 6-second timeout
+      const cdnPromise = Tesseract.createWorker('eng', 1, {
         workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
         corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0',
-        langPath: 'https://cdn.jsdelivr.net/gh/naptha/tessdata@gh-pages/4.0.0',
+        langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng/4.0.0_best_int',
         logger
       });
+
+      const cdnTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('CDN fallback timeout')), 6000)
+      );
+
+      const worker = await Promise.race([cdnPromise, cdnTimeout]);
 
       try {
         await worker.setParameters({
@@ -178,7 +210,6 @@ export function preprocessReceiptImage(imgElement, rotationAngle = 0) {
       let norm = (v - minLum) / range;
       if (norm < 0) norm = 0;
       else if (norm > 1) norm = 1;
-      // Slight gamma to darken thermal print dots
       lut[v] = Math.max(0, Math.min(255, Math.round(Math.pow(norm, 1.25) * 255)));
     }
 
@@ -224,7 +255,7 @@ export async function runReceiptOCR(imgElement, rotationAngle = 0, onProgress) {
               parsed,
               rawText: fullText,
               engine: 'native_text_detector',
-              processedCanvasUrl: processedCanvas.toDataURL('image/png')
+              processedCanvasUrl: processedCanvas.toDataURL('image/jpeg', 0.85)
             };
           }
         }
@@ -243,7 +274,7 @@ export async function runReceiptOCR(imgElement, rotationAngle = 0, onProgress) {
 
     const recognizePromise = worker.recognize(jpegUrl);
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Recognition timed out')), 12000)
+      setTimeout(() => reject(new Error('Recognition timed out')), 9000)
     );
 
     const { data: { text } } = await Promise.race([recognizePromise, timeoutPromise]);

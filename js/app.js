@@ -478,10 +478,7 @@ async function processImageFile(file) {
     state.currentPhotoUrl = event.target.result;
     state.rotationAngle = 0;
     loadPhotoIntoPreview(state.currentPhotoUrl, () => {
-      // User requested: "take photo first, then enter"
-      // Immediately switch to the confirm screen with the photo visible side-by-side!
-      switchTab('confirm');
-      showToast('Photo loaded! Enter numbers directly, or tap Auto-Detect.');
+      runOCRAndPopulate();
     });
   };
   reader.readAsDataURL(file);
@@ -511,11 +508,67 @@ function updatePreviewTransform() {
   }
 }
 
+let ocrAborted = false;
+
+/**
+ * Fast Optical Recognition & Number Populator
+ * Auto-detects prescription numbers with an unbreakable 8-second safety timeout
+ */
+async function runOCRAndPopulate() {
+  ocrAborted = false;
+  elements.ocrProgressOverlay.hidden = false;
+  elements.ocrProgressBar.style.width = '15%';
+  elements.ocrProgressTitle.textContent = t('ocrProcessing');
+  elements.ocrProgressStatus.textContent = 'Reading receipt lines… (tap Skip anytime)';
+
+  try {
+    const ocrPromise = runReceiptOCR(
+      state.currentImageElement,
+      state.rotationAngle,
+      (statusText, pct) => {
+        if (ocrAborted) return;
+        elements.ocrProgressStatus.textContent = statusText;
+        if (pct) elements.ocrProgressBar.style.width = `${Math.max(15, Math.min(100, pct))}%`;
+      }
+    );
+
+    // Hard 8-second timeout so user is NEVER stuck under ANY circumstances
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('TIMEOUT')), 8000)
+    );
+
+    const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
+
+    if (ocrAborted) return;
+
+    elements.ocrProgressBar.style.width = '100%';
+    setTimeout(() => {
+      elements.ocrProgressOverlay.hidden = true;
+    }, 200);
+
+    if (ocrResult && ocrResult.success && ocrResult.parsed && 
+        (ocrResult.parsed.od.sph !== null || ocrResult.parsed.os.sph !== null || ocrResult.parsed.pd !== null)) {
+      populateConfirmFields(ocrResult.parsed);
+      switchTab('confirm');
+      showToast('✓ Receipt numbers detected! Please review and confirm.');
+    } else {
+      switchTab('confirm');
+      showToast('Receipt photo loaded! Please check and type numbers on the right.');
+    }
+  } catch (err) {
+    if (ocrAborted) return;
+    console.warn('OCR processing notice:', err);
+    elements.ocrProgressOverlay.hidden = true;
+    switchTab('confirm');
+    showToast('Receipt photo ready! Enter or confirm the numbers from the photo.');
+  }
+}
+
 let isScanning = false;
 
 /**
  * On-Demand Optical Character Recognition Runner
- * Runs only when user explicitly taps "⚡ Auto-Detect Numbers from Photo"
+ * Runs when user taps "⚡ Auto-Detect Numbers from Photo" on Confirm screen
  */
 async function triggerAutoDetectOCR() {
   if (isScanning) return;
