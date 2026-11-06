@@ -886,10 +886,10 @@ async function runOCRNonBlocking() {
         (ocrResult.parsed.od.sph !== null || ocrResult.parsed.os.sph !== null || ocrResult.parsed.pd !== null)) {
       populateConfirmFields(ocrResult.parsed);
       if (inlineStatus) {
-        inlineStatus.innerHTML = '<span class="text-success font-semibold">✓ Prescription numbers auto-detected! Review against photo.</span>';
+        inlineStatus.innerHTML = '<span class="text-success font-semibold">✓ Autorefractor average numbers auto-detected!</span>';
         inlineStatus.hidden = false;
       }
-      showToast('✓ Receipt numbers detected! Review and verify.');
+      showToast('✓ Average numbers auto-detected! Review against receipt photo.');
     } else {
       if (inlineStatus) {
         inlineStatus.innerHTML = '<span class="text-muted">Receipt photo ready. Please check photo and enter numbers below.</span>';

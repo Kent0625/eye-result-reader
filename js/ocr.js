@@ -151,7 +151,8 @@ export async function getTesseractWorker(onProgress) {
 /**
  * Preprocesses receipt image on canvas:
  * - Rotates image by given angle (0, 90, 180, 270)
- * - Contrast normalization via fast precomputed lookup table
+ * - Optimal resolution scaling for thermal receipt dot-matrix characters
+ * - GPU-accelerated contrast stretch & grayscale enhancement
  */
 export function preprocessReceiptImage(imgElement, rotationAngle = 0) {
   const canvas = document.createElement('canvas');
@@ -163,11 +164,11 @@ export function preprocessReceiptImage(imgElement, rotationAngle = 0) {
   const origWidth = imgElement.naturalWidth || imgElement.width || 800;
   const origHeight = imgElement.naturalHeight || imgElement.height || 1000;
 
-  // Scale image to optimal OCR dimensions (1000px - 1400px for sharp thermal receipt dot-matrix)
-  const maxDim = Math.max(origWidth, origHeight);
+  // Scale image to optimal OCR dimensions (1100px - 1500px for sharp thermal receipt dot-matrix)
+  const baseDim = isPerpendicular ? origHeight : origWidth;
   let scale = 1.0;
-  if (maxDim < 1000) scale = 1000 / maxDim;
-  else if (maxDim > 1400) scale = 1400 / maxDim;
+  if (baseDim < 1000) scale = 1200 / baseDim;
+  else if (baseDim > 1600) scale = 1400 / baseDim;
 
   const width = Math.round(origWidth * scale);
   const height = Math.round(origHeight * scale);
@@ -183,65 +184,23 @@ export function preprocessReceiptImage(imgElement, rotationAngle = 0) {
   ctx.save();
   ctx.translate(canvas.width / 2, canvas.height / 2);
   ctx.rotate(angleRad);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  // Hardware-accelerated contrast enhancement:
+  // Converts thermal printout to crisp dark ink against light paper, removing background shadows without bleeding
+  ctx.filter = 'grayscale(1) contrast(1.5) brightness(1.04)';
   ctx.drawImage(imgElement, -width / 2, -height / 2, width, height);
   ctx.restore();
-
-  // Robust Contrast Normalization using 256-bin luminance histogram
-  // Uses 2nd to 98th percentile to prevent single dark/light border pixels from flattening contrast
-  try {
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
-    const len = data.length;
-    const numPixels = len / 4;
-
-    const hist = new Uint32Array(256);
-
-    for (let i = 0; i < len; i += 4) {
-      const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-      data[i] = lum;
-      hist[lum]++;
-    }
-
-    const p2Target = numPixels * 0.02;
-    const p98Target = numPixels * 0.98;
-    let cum = 0;
-    let pLow = 0;
-    let pHigh = 255;
-
-    for (let v = 0; v < 256; v++) {
-      cum += hist[v];
-      if (cum >= p2Target && pLow === 0) pLow = v;
-      if (cum >= p98Target) { pHigh = v; break; }
-    }
-
-    const range = (pHigh - pLow) || 1;
-    const lut = new Uint8Array(256);
-    for (let v = 0; v < 256; v++) {
-      let norm = (v - pLow) / range;
-      if (norm < 0) norm = 0;
-      else if (norm > 1) norm = 1;
-      lut[v] = Math.max(0, Math.min(255, Math.round(Math.pow(norm, 1.15) * 255)));
-    }
-
-    for (let i = 0; i < len; i += 4) {
-      const val = lut[data[i]];
-      data[i] = val;
-      data[i + 1] = val;
-      data[i + 2] = val;
-    }
-
-    ctx.putImageData(imgData, 0, 0);
-  } catch (e) {
-    console.warn('Canvas pixel enhancement notice:', e);
-  }
 
   return canvas;
 }
 
 /**
  * Runs OCR on an image element:
- * 1. Tries native browser TextDetector (Instant on Android Chrome)
- * 2. Falls back to local Tesseract.js Web Worker
+ * 1. Enhances contrast on canvas
+ * 2. Checks native browser TextDetector if available
+ * 3. Runs local Tesseract.js Web Worker (PSM 6)
+ * 4. Auto-detects orientation if photo was captured sideways
  */
 export async function runReceiptOCR(imgElement, rotationAngle = 0, onProgress) {
   try {
@@ -287,8 +246,33 @@ export async function runReceiptOCR(imgElement, rotationAngle = 0, onProgress) {
 
     const { data: { text } } = await Promise.race([recognizePromise, timeoutPromise]);
 
-    if (onProgress) onProgress('Parsing prescription numbers…', 95);
-    const parsed = parseReceiptText(text);
+    if (onProgress) onProgress('Parsing average prescription numbers…', 95);
+    let parsed = parseReceiptText(text);
+
+    // Orientation Auto-Recovery:
+    // If no eye readings were found and image was taken in landscape (sideways phone photo)
+    if ((!parsed || (parsed.od.sph === null && parsed.os.sph === null)) && rotationAngle === 0) {
+      const isLandscape = (imgElement.naturalWidth || 0) > (imgElement.naturalHeight || 0) * 1.15;
+      if (isLandscape) {
+        if (onProgress) onProgress('Checking sideways orientation…', 85);
+        try {
+          const rotatedCanvas = preprocessReceiptImage(imgElement, 270);
+          const rotatedResult = await worker.recognize(rotatedCanvas);
+          const rotatedParsed = parseReceiptText(rotatedResult.data.text);
+          if (rotatedParsed && (rotatedParsed.od.sph !== null || rotatedParsed.os.sph !== null)) {
+            return {
+              success: true,
+              parsed: rotatedParsed,
+              rawText: rotatedResult.data.text,
+              engine: 'tesseract_local_rotated_270',
+              processedCanvasUrl: rotatedCanvas.toDataURL('image/jpeg', 0.85)
+            };
+          }
+        } catch (rotErr) {
+          console.warn('Sideways orientation check notice:', rotErr);
+        }
+      }
+    }
 
     return {
       success: true,
