@@ -168,6 +168,16 @@ const elements = {
   dialogCloseBtn: document.getElementById('dialog-close-btn'),
   dialogOkBtn: document.getElementById('dialog-ok-btn'),
 
+  // Camera Dialog
+  cameraDialog: document.getElementById('camera-dialog'),
+  cameraVideo: document.getElementById('camera-video'),
+  cameraModalTitle: document.getElementById('camera-modal-title'),
+  cameraGuideText: document.getElementById('camera-guide-text'),
+  btnCloseCamera: document.getElementById('btn-close-camera'),
+  btnSwitchCamera: document.getElementById('btn-switch-camera'),
+  btnCapturePhoto: document.getElementById('btn-capture-photo'),
+  btnCameraUploadFallback: document.getElementById('btn-camera-upload-fallback'),
+
   // Toast
   toast: document.getElementById('toast')
 };
@@ -200,11 +210,33 @@ function setupEventListeners() {
   elements.tabRecords.addEventListener('click', () => switchTab('records'));
   elements.tabExport.addEventListener('click', () => switchTab('export'));
 
-  // Upload Trigger Buttons
+  // Upload & Camera Trigger Buttons
   elements.btnCamera.addEventListener('click', (e) => {
     e.stopPropagation();
-    elements.cameraInput.click();
+    startLiveCamera();
   });
+
+  if (elements.btnCloseCamera) {
+    elements.btnCloseCamera.addEventListener('click', stopLiveCamera);
+  }
+  if (elements.btnSwitchCamera) {
+    elements.btnSwitchCamera.addEventListener('click', switchCameraFacing);
+  }
+  if (elements.btnCapturePhoto) {
+    elements.btnCapturePhoto.addEventListener('click', captureFrameFromCamera);
+  }
+  if (elements.btnCameraUploadFallback) {
+    elements.btnCameraUploadFallback.addEventListener('click', () => {
+      stopLiveCamera();
+      elements.fileInput.click();
+    });
+  }
+  if (elements.cameraDialog) {
+    elements.cameraDialog.addEventListener('cancel', (e) => {
+      e.preventDefault();
+      stopLiveCamera();
+    });
+  }
   elements.btnBrowse.addEventListener('click', (e) => {
     e.stopPropagation();
     elements.fileInput.click();
@@ -380,6 +412,10 @@ function updateUILanguage() {
   }
   document.getElementById('ocr-notice-text').textContent = dict.ocrNotice;
   elements.ocrProgressTitle.textContent = dict.ocrProcessing;
+  if (elements.cameraModalTitle) elements.cameraModalTitle.textContent = dict.cameraModalTitle;
+  if (elements.cameraGuideText) elements.cameraGuideText.textContent = dict.cameraGuide;
+  if (elements.btnSwitchCamera) elements.btnSwitchCamera.setAttribute('aria-label', dict.switchCameraBtn || 'Switch Camera');
+  if (elements.btnCapturePhoto) elements.btnCapturePhoto.setAttribute('aria-label', dict.capturePhotoBtn || 'Capture Receipt Photo');
 
   // Screen 2: Confirm
   document.getElementById('confirm-title').textContent = dict.confirmTitle;
@@ -456,6 +492,96 @@ function updateUILanguage() {
   document.getElementById('webhook-guide-btn-text').textContent = dict.webhookGuideBtn;
   document.getElementById('records-table-title').textContent = dict.recordsTableTitle;
   document.getElementById('no-records-text').textContent = dict.noRecordsMsg;
+}
+
+/**
+ * Live User Camera Controller
+ */
+let currentCameraStream = null;
+let currentFacingMode = 'environment'; // 'environment' (rear camera) or 'user' (front)
+
+async function startLiveCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast('Live camera not supported. Opening system camera.');
+    elements.cameraInput.click();
+    return;
+  }
+
+  try {
+    stopLiveCamera();
+
+    const constraints = {
+      video: {
+        facingMode: { ideal: currentFacingMode },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    currentCameraStream = stream;
+    elements.cameraVideo.srcObject = stream;
+    await elements.cameraVideo.play();
+
+    if (elements.cameraDialog && elements.cameraDialog.showModal) {
+      elements.cameraDialog.showModal();
+    } else if (elements.cameraDialog) {
+      elements.cameraDialog.setAttribute('open', '');
+    }
+  } catch (err) {
+    console.warn('Camera access notice:', err);
+    stopLiveCamera();
+    showToast(t('cameraDenied'));
+    // Fall back to native camera file input
+    elements.cameraInput.click();
+  }
+}
+
+function stopLiveCamera() {
+  if (currentCameraStream) {
+    currentCameraStream.getTracks().forEach(track => track.stop());
+    currentCameraStream = null;
+  }
+  if (elements.cameraVideo) {
+    elements.cameraVideo.srcObject = null;
+  }
+  if (elements.cameraDialog) {
+    if (elements.cameraDialog.close) {
+      try { elements.cameraDialog.close(); } catch(e) {}
+    } else {
+      elements.cameraDialog.removeAttribute('open');
+    }
+  }
+}
+
+async function switchCameraFacing() {
+  currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+  await startLiveCamera();
+}
+
+function captureFrameFromCamera() {
+  if (!elements.cameraVideo || !elements.cameraVideo.videoWidth) {
+    showToast('Camera feed not ready. Please try again.');
+    return;
+  }
+
+  const video = elements.cameraVideo;
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  const capturedDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+  stopLiveCamera();
+
+  state.currentPhotoUrl = capturedDataUrl;
+  state.rotationAngle = 0;
+  loadPhotoIntoPreview(capturedDataUrl, () => {
+    runOCRAndPopulate();
+  });
 }
 
 /**
