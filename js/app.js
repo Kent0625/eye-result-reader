@@ -179,6 +179,9 @@ const elements = {
   btnCameraManualAction: document.getElementById('btn-camera-manual-action'),
   btnRetryCamera: document.getElementById('btn-retry-camera'),
   btnCameraErrorGallery: document.getElementById('btn-camera-error-gallery'),
+  btnReloadPage: document.getElementById('btn-reload-page'),
+  btnCameraErrorSystem: document.getElementById('btn-camera-error-system'),
+  cameraHelpTitle: document.getElementById('camera-help-title'),
 
   // Toast
   toast: document.getElementById('toast')
@@ -229,8 +232,7 @@ function setupEventListeners() {
   }
   if (elements.btnCameraGalleryAction) {
     elements.btnCameraGalleryAction.addEventListener('click', () => {
-      stopLiveCamera();
-      elements.fileInput.click();
+      openGalleryPicker();
     });
   }
   if (elements.btnCameraManualAction) {
@@ -249,14 +251,23 @@ function setupEventListeners() {
   }
   if (elements.btnCameraErrorGallery) {
     elements.btnCameraErrorGallery.addEventListener('click', () => {
-      stopLiveCamera();
-      elements.fileInput.click();
+      openGalleryPicker();
+    });
+  }
+  if (elements.btnCameraErrorSystem) {
+    elements.btnCameraErrorSystem.addEventListener('click', () => {
+      openSystemCamera();
+    });
+  }
+  if (elements.btnReloadPage) {
+    elements.btnReloadPage.addEventListener('click', () => {
+      window.location.reload();
     });
   }
 
   elements.btnBrowse.addEventListener('click', (e) => {
     e.stopPropagation();
-    elements.fileInput.click();
+    openGalleryPicker();
   });
 
   // Clicking the dropzone triggers the live camera
@@ -434,6 +445,9 @@ function updateUILanguage() {
   if (retryBtn) retryBtn.textContent = dict.cameraRetryBtn || 'Try Camera Again';
   const fallbackGalleryBtn = document.getElementById('btn-camera-error-gallery');
   if (fallbackGalleryBtn) fallbackGalleryBtn.textContent = dict.cameraFallbackFileBtn || 'Choose Photo from Gallery';
+  if (elements.cameraHelpTitle) elements.cameraHelpTitle.textContent = dict.cameraHelpTitle;
+  if (elements.btnReloadPage) elements.btnReloadPage.textContent = dict.reloadPageBtn || '↻ Reload Page';
+  if (elements.btnCameraErrorSystem) elements.btnCameraErrorSystem.textContent = dict.usePhoneCameraBtn || '📷 Use Phone Camera App';
 
   // Screen 2: Confirm
   document.getElementById('confirm-title').textContent = dict.confirmTitle;
@@ -657,6 +671,26 @@ function stopLiveCamera() {
   }
 }
 
+function openGalleryPicker() {
+  stopLiveCamera();
+  setTimeout(() => {
+    if (elements.fileInput) {
+      elements.fileInput.value = '';
+      elements.fileInput.click();
+    }
+  }, 60);
+}
+
+function openSystemCamera() {
+  stopLiveCamera();
+  setTimeout(() => {
+    if (elements.cameraInput) {
+      elements.cameraInput.value = '';
+      elements.cameraInput.click();
+    }
+  }, 60);
+}
+
 async function switchCameraFacing() {
   currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
   await startLiveCamera();
@@ -713,22 +747,53 @@ function handleFileSelect(e) {
 }
 
 async function processImageFile(file) {
-  if (!file || !file.type.startsWith('image/')) {
-    showToast('Please select a valid image file (JPG, PNG).');
+  if (!file) return;
+
+  const filename = file.name || '';
+  const isImageMime = file.type && file.type.startsWith('image/');
+  const isImageExt = /\.(jpe?g|png|webp|heic|bmp|tiff|gif)$/i.test(filename);
+
+  // Forgiving format check so Android Gallery and Downloads don't get rejected
+  if (!isImageMime && !isImageExt && file.type !== '' && file.type !== 'application/octet-stream') {
+    showToast('Please select an image file (JPG, PNG, WEBP).');
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = (event) => {
-    state.currentPhotoUrl = event.target.result;
+  // Switch to confirm tab IMMEDIATELY so user sees upload action reflect
+  switchTab('confirm');
+  showToast('Photo uploaded! Loading preview & reading numbers…');
+
+  let previewUrl = null;
+  try {
+    previewUrl = URL.createObjectURL(file);
+  } catch (err) {
+    console.warn('createObjectURL not available:', err);
+  }
+
+  if (previewUrl) {
+    state.currentPhotoUrl = previewUrl;
     state.rotationAngle = 0;
-    loadPhotoIntoPreview(state.currentPhotoUrl, () => {
-      switchTab('confirm');
-      showToast('Photo loaded! Reading numbers…');
+    loadPhotoIntoPreview(previewUrl, () => {
       runOCRNonBlocking();
     });
-  };
-  reader.readAsDataURL(file);
+  } else {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      state.currentPhotoUrl = event.target.result;
+      state.rotationAngle = 0;
+      loadPhotoIntoPreview(state.currentPhotoUrl, () => {
+        runOCRNonBlocking();
+      });
+    };
+    reader.onerror = () => {
+      showToast('Error reading image file.');
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // Reset file inputs so re-selecting the exact same image triggers change event
+  if (elements.fileInput) elements.fileInput.value = '';
+  if (elements.cameraInput) elements.cameraInput.value = '';
 }
 
 function loadPhotoIntoPreview(url, onLoaded) {
@@ -736,8 +801,20 @@ function loadPhotoIntoPreview(url, onLoaded) {
   img.onload = () => {
     state.currentImageElement = img;
     elements.previewImage.src = url;
-    elements.previewImage.hidden = false;
-    elements.previewEmpty.hidden = true;
+    elements.previewImage.removeAttribute('hidden');
+    elements.previewImage.style.display = 'block';
+    elements.previewEmpty.setAttribute('hidden', '');
+    elements.previewEmpty.style.display = 'none';
+    updatePreviewTransform();
+    if (onLoaded) onLoaded();
+  };
+  img.onerror = (err) => {
+    console.warn('Image element load notice:', err);
+    elements.previewImage.src = url;
+    elements.previewImage.removeAttribute('hidden');
+    elements.previewImage.style.display = 'block';
+    elements.previewEmpty.setAttribute('hidden', '');
+    elements.previewEmpty.style.display = 'none';
     updatePreviewTransform();
     if (onLoaded) onLoaded();
   };
