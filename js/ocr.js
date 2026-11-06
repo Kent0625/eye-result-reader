@@ -85,7 +85,7 @@ export async function getTesseractWorker(onProgress) {
 
   isInitializing = (async () => {
     try {
-      // Primary: Local vendor files with 7-second hard timeout
+      // Primary: Local vendor files with 20-second timeout for first-time wasm load
       const localPromise = Tesseract.createWorker('eng', 1, {
         workerPath,
         corePath,
@@ -96,18 +96,19 @@ export async function getTesseractWorker(onProgress) {
       });
 
       const localTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Local worker timeout')), 7000)
+        setTimeout(() => reject(new Error('Local worker timeout')), 20000)
       );
 
       const worker = await Promise.race([localPromise, localTimeout]);
 
       try {
+        // PSM 6: Assume a single uniform block of text.
+        // Critical for receipts: preserves horizontal SPH, CYL, AXIS tabular layout.
         await worker.setParameters({
-          tessedit_char_whitelist: '0123456789+-.,*#<>[]():/RDLSPOXAVEMNDKFPPSrldsphcylaxavemm ',
-          tessedit_pageseg_mode: '11'
+          tessedit_pageseg_mode: '6'
         });
       } catch (paramErr) {
-        console.warn('Parameter whitelist notice:', paramErr);
+        console.warn('Parameter notice:', paramErr);
       }
 
       tesseractWorker = worker;
@@ -115,7 +116,7 @@ export async function getTesseractWorker(onProgress) {
     } catch (localErr) {
       console.warn('Local worker initialization issue, trying CDN fallback mirror:', localErr);
 
-      // Fallback: Public CDN mirror with 6-second timeout
+      // Fallback: Public CDN mirror with 15-second timeout
       const cdnPromise = Tesseract.createWorker('eng', 1, {
         workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
         corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0',
@@ -124,15 +125,14 @@ export async function getTesseractWorker(onProgress) {
       });
 
       const cdnTimeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('CDN fallback timeout')), 6000)
+        setTimeout(() => reject(new Error('CDN fallback timeout')), 15000)
       );
 
       const worker = await Promise.race([cdnPromise, cdnTimeout]);
 
       try {
         await worker.setParameters({
-          tessedit_char_whitelist: '0123456789+-.,*#<>[]():/RDLSPOXAVEMNDKFPPSrldsphcylaxavemm ',
-          tessedit_pageseg_mode: '11'
+          tessedit_pageseg_mode: '6'
         });
       } catch (e) {
         // ignore
@@ -163,11 +163,11 @@ export function preprocessReceiptImage(imgElement, rotationAngle = 0) {
   const origWidth = imgElement.naturalWidth || imgElement.width || 800;
   const origHeight = imgElement.naturalHeight || imgElement.height || 1000;
 
-  // Scale image to optimal OCR dimensions (700px - 1000px max for speed + mobile memory)
+  // Scale image to optimal OCR dimensions (1000px - 1400px for sharp thermal receipt dot-matrix)
   const maxDim = Math.max(origWidth, origHeight);
   let scale = 1.0;
-  if (maxDim < 700) scale = 700 / maxDim;
-  else if (maxDim > 1000) scale = 1000 / maxDim;
+  if (maxDim < 1000) scale = 1000 / maxDim;
+  else if (maxDim > 1400) scale = 1400 / maxDim;
 
   const width = Math.round(origWidth * scale);
   const height = Math.round(origHeight * scale);
@@ -186,34 +186,43 @@ export function preprocessReceiptImage(imgElement, rotationAngle = 0) {
   ctx.drawImage(imgElement, -width / 2, -height / 2, width, height);
   ctx.restore();
 
-  // Fast Contrast Normalization using LUT
+  // Robust Contrast Normalization using 256-bin luminance histogram
+  // Uses 2nd to 98th percentile to prevent single dark/light border pixels from flattening contrast
   try {
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
     const len = data.length;
+    const numPixels = len / 4;
 
-    let minLum = 255;
-    let maxLum = 0;
+    const hist = new Uint32Array(256);
 
-    // First pass: find min and max luminance
     for (let i = 0; i < len; i += 4) {
       const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
       data[i] = lum;
-      if (lum < minLum) minLum = lum;
-      if (lum > maxLum) maxLum = lum;
+      hist[lum]++;
     }
 
-    // Precompute 256-entry lookup table for contrast stretch & slight gamma
-    const range = (maxLum - minLum) || 1;
+    const p2Target = numPixels * 0.02;
+    const p98Target = numPixels * 0.98;
+    let cum = 0;
+    let pLow = 0;
+    let pHigh = 255;
+
+    for (let v = 0; v < 256; v++) {
+      cum += hist[v];
+      if (cum >= p2Target && pLow === 0) pLow = v;
+      if (cum >= p98Target) { pHigh = v; break; }
+    }
+
+    const range = (pHigh - pLow) || 1;
     const lut = new Uint8Array(256);
     for (let v = 0; v < 256; v++) {
-      let norm = (v - minLum) / range;
+      let norm = (v - pLow) / range;
       if (norm < 0) norm = 0;
       else if (norm > 1) norm = 1;
-      lut[v] = Math.max(0, Math.min(255, Math.round(Math.pow(norm, 1.25) * 255)));
+      lut[v] = Math.max(0, Math.min(255, Math.round(Math.pow(norm, 1.15) * 255)));
     }
 
-    // Second pass: apply LUT
     for (let i = 0; i < len; i += 4) {
       const val = lut[data[i]];
       data[i] = val;
@@ -269,12 +278,11 @@ export async function runReceiptOCR(imgElement, rotationAngle = 0, onProgress) {
     const worker = await getTesseractWorker(onProgress);
 
     if (onProgress) onProgress('Analyzing receipt lines…', 70);
-    // Convert to compressed JPEG data URL for fast transfer to Web Worker
     const jpegUrl = processedCanvas.toDataURL('image/jpeg', 0.85);
 
-    const recognizePromise = worker.recognize(jpegUrl);
+    const recognizePromise = worker.recognize(processedCanvas);
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Recognition timed out')), 9000)
+      setTimeout(() => reject(new Error('Recognition timed out')), 25000)
     );
 
     const { data: { text } } = await Promise.race([recognizePromise, timeoutPromise]);

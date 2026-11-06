@@ -33,18 +33,29 @@ export function parseReceiptText(rawText) {
   const lines = cleanedText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
   // 1. Try to extract Pupillary Distance (PD)
-  // Matches "PD = 64", "PD: 63.5", "PD 64mm", "P.D. 62"
-  for (const line of lines) {
-    const pdMatch = line.match(/\b(?:PD|P\.D\.|P\s*D)\s*[:=]?\s*(\d{2}(?:\.\d{1,2})?)\s*(?:mm)?\b/i);
+  // Matches "PD = 64", "PD: 63.5", "PD 64mm", "P.D. 62", "PD - 63.5", "PD\n63.5"
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const pdMatch = line.match(/\b(?:PD|P\.D\.|P\s*D)\s*[:=\-~]?\s*(\d{2}(?:\.\d{1,2})?)\s*(?:mm)?\b/i);
     if (pdMatch && result.pd === null) {
       const val = parseFloat(pdMatch[1]);
       if (val >= 40 && val <= 85) {
         result.pd = val;
       }
+    } else if (result.pd === null && /\b(?:PD|P\.D\.|P\s*D)\b/i.test(line)) {
+      if (i + 1 < lines.length) {
+        const nextMatch = lines[i + 1].match(/^[:=\-~]?\s*(\d{2}(?:\.\d{1,2})?)\s*(?:mm)?\b/i);
+        if (nextMatch) {
+          const val = parseFloat(nextMatch[1]);
+          if (val >= 40 && val <= 85) {
+            result.pd = val;
+          }
+        }
+      }
     }
 
     // Try to extract Pupil Size (PS / PPS) from standalone line if present
-    const ppsMatch = line.match(/\b(?:PPS|PS|P\.P\.S\.|P\s*S|PUPIL)\s*[:=]?\s*(\d{1,2}(?:\.\d{1,2})?)\s*(?:mm)?\b/i);
+    const ppsMatch = line.match(/\b(?:PPS|PS|P\.P\.S\.|P\s*S|PUPIL)\s*[:=\-~]?\s*(\d{1,2}(?:\.\d{1,2})?)\s*(?:mm)?\b/i);
     if (ppsMatch) {
       const val = parseFloat(ppsMatch[1]);
       if (val >= 1.5 && val <= 10.0) {
@@ -143,6 +154,26 @@ function parseEyeSection(sectionLines, eyeName, existingPps) {
         aveReading = parsed;
       } else {
         readings.push(parsed);
+      }
+    }
+  }
+
+  // Resilient multiline fallback: if horizontal triplets weren't found,
+  // scan consecutive numbers (e.g. SPH on one line, CYL on next, AX on next)
+  if (!aveReading && readings.length === 0) {
+    for (let i = 0; i < sectionLines.length - 2; i++) {
+      const sMatch = sectionLines[i].match(/^[*\s]*([+-]?\d{1,2}\.\d{2})\b/);
+      const cMatch = sectionLines[i + 1].match(/^[*\s]*([+-]?\d{1,2}\.\d{2})\b/);
+      const aMatch = sectionLines[i + 2].match(/^[*\s]*(\d{1,3})\b/);
+
+      if (sMatch && cMatch && aMatch) {
+        const sph = parseFloat(sMatch[1]);
+        const cyl = parseFloat(cMatch[1]);
+        const ax = parseInt(aMatch[1], 10);
+        if (sph >= -25 && sph <= 25 && cyl >= -15 && cyl <= 15 && ax >= 0 && ax <= 180) {
+          readings.push({ sph, cyl, ax });
+          i += 2;
+        }
       }
     }
   }

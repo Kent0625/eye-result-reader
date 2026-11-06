@@ -798,23 +798,39 @@ async function processImageFile(file) {
 
 function loadPhotoIntoPreview(url, onLoaded) {
   const img = new Image();
-  img.onload = () => {
+  img.onload = async () => {
+    try {
+      if ('decode' in img) {
+        await img.decode();
+      }
+    } catch (e) {
+      // image is already loaded
+    }
     state.currentImageElement = img;
-    elements.previewImage.src = url;
-    elements.previewImage.removeAttribute('hidden');
-    elements.previewImage.style.display = 'block';
-    elements.previewEmpty.setAttribute('hidden', '');
-    elements.previewEmpty.style.display = 'none';
+    if (elements.previewImage) {
+      elements.previewImage.src = url;
+      elements.previewImage.removeAttribute('hidden');
+      elements.previewImage.style.display = 'block';
+    }
+    if (elements.previewEmpty) {
+      elements.previewEmpty.setAttribute('hidden', '');
+      elements.previewEmpty.style.display = 'none';
+    }
     updatePreviewTransform();
     if (onLoaded) onLoaded();
   };
   img.onerror = (err) => {
     console.warn('Image element load notice:', err);
-    elements.previewImage.src = url;
-    elements.previewImage.removeAttribute('hidden');
-    elements.previewImage.style.display = 'block';
-    elements.previewEmpty.setAttribute('hidden', '');
-    elements.previewEmpty.style.display = 'none';
+    state.currentImageElement = img;
+    if (elements.previewImage) {
+      elements.previewImage.src = url;
+      elements.previewImage.removeAttribute('hidden');
+      elements.previewImage.style.display = 'block';
+    }
+    if (elements.previewEmpty) {
+      elements.previewEmpty.setAttribute('hidden', '');
+      elements.previewEmpty.style.display = 'none';
+    }
     updatePreviewTransform();
     if (onLoaded) onLoaded();
   };
@@ -841,8 +857,10 @@ async function runOCRNonBlocking() {
   const inlineMsg = document.getElementById('ocr-inline-msg');
   const autoDetectBtn = elements.btnAutoDetectOcr;
 
-  if (inlineStatus) inlineStatus.hidden = false;
-  if (inlineMsg) inlineMsg.textContent = 'Reading receipt numbers…';
+  if (inlineStatus) {
+    inlineStatus.innerHTML = '<div class="spinner-sm" aria-hidden="true"></div><span id="ocr-inline-msg">Reading receipt numbers…</span>';
+    inlineStatus.hidden = false;
+  }
   if (autoDetectBtn) autoDetectBtn.disabled = true;
 
   try {
@@ -850,13 +868,16 @@ async function runOCRNonBlocking() {
       state.currentImageElement,
       state.rotationAngle,
       (statusText, pct) => {
-        if (inlineMsg) inlineMsg.textContent = statusText;
+        const msgEl = document.getElementById('ocr-inline-msg');
+        if (msgEl) {
+          msgEl.textContent = pct ? `${statusText} (${pct}%)` : statusText;
+        }
       }
     );
 
-    // Hard 8-second safety timeout
+    // 25-second safety timeout for mobile WebAssembly / model initialization
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('TIMEOUT')), 8000)
+      setTimeout(() => reject(new Error('TIMEOUT')), 25000)
     );
 
     const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
@@ -886,7 +907,7 @@ async function runOCRNonBlocking() {
     if (autoDetectBtn) autoDetectBtn.disabled = false;
     setTimeout(() => {
       if (inlineStatus) inlineStatus.hidden = true;
-    }, 6000);
+    }, 8000);
   }
 }
 
