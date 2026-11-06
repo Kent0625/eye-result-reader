@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Eye Result Reader — Autorefractometer Printout Interpreter</title>
   <meta name="description" content="In-browser private reader for autorefractometer printout slips with bilingual English/Bisaya explanations, visual scales, and instant Excel export.">
-  <link rel="stylesheet" href="styles.css?v=3.8">
+  <link rel="stylesheet" href="styles.css?v=4.0">
   <!-- Vendor libraries: SheetJS for Excel export & Tesseract for OCR -->
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="vendor/tesseract.min.js"></script>
@@ -130,29 +130,28 @@
         </p>
       </div>
 
-      <!-- Upload Zone Card -->
+      <!-- Upload & Camera Trigger Card -->
       <div class="upload-card">
-        <div class="upload-dropzone" id="dropzone" tabindex="0" role="button" aria-label="Drop receipt image or click to select">
+        <div class="upload-dropzone" id="dropzone" tabindex="0" role="button" aria-label="Open camera to scan receipt or drag and drop image">
           <input type="file" id="file-input" accept="image/*" class="sr-only" aria-label="Upload receipt image file">
           <input type="file" id="camera-input" accept="image/*" capture="environment" class="sr-only" aria-label="Take receipt photo with camera">
 
           <div class="dropzone-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
-              <path d="M12 12v9"></path>
-              <path d="m16 16-4-4-4 4"></path>
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
             </svg>
           </div>
-          <h3 id="upload-zone-title" class="dropzone-title">Snap or Select Printout</h3>
-          <p id="upload-zone-prompt" class="dropzone-subtitle">Drag and drop a photo here, or click to choose from camera / gallery</p>
+          <h3 id="upload-zone-title" class="dropzone-title">Scan Autorefractometer Printout</h3>
+          <p id="upload-zone-prompt" class="dropzone-subtitle">Tap below to access your camera and capture the receipt</p>
 
           <div class="upload-buttons-row">
-            <button type="button" id="btn-camera" class="btn btn-primary">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <button type="button" id="btn-camera" class="btn btn-primary btn-lg camera-main-trigger-btn">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
                 <circle cx="12" cy="13" r="4"></circle>
               </svg>
-              <span id="upload-camera-btn-text">Take Photo &amp; Enter Numbers</span>
+              <span id="upload-camera-btn-text">Take Photo with Camera</span>
             </button>
             <button type="button" id="btn-browse" class="btn btn-secondary">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -160,7 +159,7 @@
                 <circle cx="9" cy="9" r="2"></circle>
                 <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
               </svg>
-              <span id="upload-file-btn-text">Choose Photo &amp; Enter Numbers</span>
+              <span id="upload-file-btn-text">Choose Photo from Gallery</span>
             </button>
           </div>
         </div>
@@ -191,21 +190,6 @@
             <line x1="12" y1="8" x2="12.01" y2="8"></line>
           </svg>
           <p id="ocr-notice-text">Tips for best reading: Ensure the printout is upright, flat, and well-lit. Avoid tilted angles. The confirm screen lets you check and adjust every number.</p>
-        </div>
-      </div>
-
-      <!-- OCR Progress Modal / Overlay -->
-      <div id="ocr-progress-overlay" class="progress-overlay" hidden aria-live="polite">
-        <div class="progress-card">
-          <div class="spinner" aria-hidden="true"></div>
-          <h3 id="ocr-progress-title">Reading printout on this device…</h3>
-          <p id="ocr-progress-status">Analyzing lines and optical numbers…</p>
-          <div class="progress-bar-container">
-            <div id="ocr-progress-bar" class="progress-bar-fill" style="width: 25%;"></div>
-          </div>
-          <button type="button" id="btn-cancel-ocr" class="btn btn-secondary btn-sm" style="margin-top: 18px; width: 100%;">
-            <span id="cancel-ocr-btn-text">Skip & Enter Manually &rarr;</span>
-          </button>
         </div>
       </div>
     </section>
@@ -834,59 +818,97 @@
     </div>
   </dialog>
 
-  <!-- Live In-Browser Camera Viewfinder Modal -->
-  <dialog id="camera-dialog" class="camera-dialog" aria-labelledby="camera-modal-title">
-    <div class="camera-dialog-content">
-      <div class="camera-dialog-header">
-        <h3 id="camera-modal-title" class="camera-modal-title">Live Receipt Scanner</h3>
-        <button type="button" id="btn-close-camera" class="btn-icon camera-close-btn" aria-label="Close camera">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <!-- Live In-Browser Camera Viewfinder Overlay -->
+  <div id="camera-overlay" class="camera-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="camera-modal-title">
+    <div class="camera-overlay-container">
+      <!-- Camera Top Navigation -->
+      <div class="camera-top-bar">
+        <button type="button" id="btn-close-camera" class="camera-btn-icon" aria-label="Close camera">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
           </svg>
         </button>
-      </div>
-
-      <div class="camera-viewport-container">
-        <video id="camera-video" playsinline autoplay muted class="camera-video"></video>
-        <!-- Overlay Frame Guide -->
-        <div class="camera-frame-guide" aria-hidden="true">
-          <div class="frame-corner top-left"></div>
-          <div class="frame-corner top-right"></div>
-          <div class="frame-corner bottom-left"></div>
-          <div class="frame-corner bottom-right"></div>
-          <span id="camera-guide-text" class="frame-guide-hint">Align receipt within frame</span>
-        </div>
-      </div>
-
-      <div class="camera-controls-bar">
-        <button type="button" id="btn-switch-camera" class="btn-icon camera-ctrl-btn" aria-label="Switch Camera" title="Switch front/back camera">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <h3 id="camera-modal-title" class="camera-title">Receipt Camera Scanner</h3>
+        <button type="button" id="btn-switch-camera" class="camera-btn-icon" aria-label="Switch front or rear camera" title="Switch front/rear camera">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 3.2 1.88 5.96 4.6 7.28L8 20v2h8v-2l-.6-2.72C18.12 15.96 20 13.2 20 10z"></path>
             <polyline points="1 4 1 10 7 10"></polyline>
             <polyline points="23 20 23 14 17 14"></polyline>
           </svg>
         </button>
+      </div>
 
-        <button type="button" id="btn-capture-photo" class="camera-shutter-btn" aria-label="Capture Receipt Photo">
-          <span class="shutter-inner"></span>
-        </button>
+      <!-- Viewport with Live Video Feed -->
+      <div class="camera-viewport" id="camera-viewport">
+        <video id="camera-video" playsinline autoplay muted class="camera-video-stream"></video>
+        <div id="camera-flash" class="camera-flash" aria-hidden="true"></div>
 
-        <button type="button" id="btn-camera-upload-fallback" class="btn-icon camera-ctrl-btn" aria-label="Choose file instead" title="Choose file">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <!-- Camera Connecting Spinner -->
+        <div id="camera-loading" class="camera-loading-state">
+          <div class="camera-spinner" aria-hidden="true"></div>
+          <span id="camera-loading-text">Starting camera…</span>
+        </div>
+
+        <!-- Receipt Alignment Frame Guide -->
+        <div class="camera-frame-guide" aria-hidden="true">
+          <div class="guide-corner top-left"></div>
+          <div class="guide-corner top-right"></div>
+          <div class="guide-corner bottom-left"></div>
+          <div class="guide-corner bottom-right"></div>
+          <span id="camera-guide-text" class="guide-hint">Align receipt within frame & tap capture</span>
+        </div>
+
+        <!-- Error State Card (if permission denied or hardware error) -->
+        <div id="camera-error-container" class="camera-error-card" hidden>
+          <div class="camera-error-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+          </div>
+          <h4 id="camera-error-title" class="camera-error-heading">Camera Access Needed</h4>
+          <p id="camera-error-message" class="camera-error-body">Please allow camera permissions in your browser to scan the receipt directly, or choose a photo from your device.</p>
+          <div class="camera-error-buttons">
+            <button type="button" id="btn-retry-camera" class="btn btn-primary btn-sm">Try Camera Again</button>
+            <button type="button" id="btn-camera-error-gallery" class="btn btn-secondary btn-sm">Choose Photo from Gallery</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Controls Bar -->
+      <div class="camera-bottom-bar">
+        <button type="button" id="btn-camera-gallery-action" class="camera-action-btn" aria-label="Choose photo from gallery">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
             <circle cx="9" cy="9" r="2"></circle>
             <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
           </svg>
+          <span id="camera-gallery-btn-text">Gallery</span>
+        </button>
+
+        <button type="button" id="btn-capture-photo" class="camera-shutter-main" aria-label="Capture receipt photo">
+          <div class="shutter-ring">
+            <div class="shutter-core"></div>
+          </div>
+        </button>
+
+        <button type="button" id="btn-camera-manual-action" class="camera-action-btn" aria-label="Enter numbers manually">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+          <span id="camera-manual-btn-text">Manual</span>
         </button>
       </div>
     </div>
-  </dialog>
+  </div>
 
   <!-- Toast Notification -->
   <div id="toast" class="toast-notification" role="status" aria-live="polite" hidden></div>
 
   <!-- Main Application Script (ES Module) -->
-  <script type="module" src="js/app.js?v=3.8"></script>
+  <script type="module" src="js/app.js?v=4.0"></script>
 </body>
 </html>

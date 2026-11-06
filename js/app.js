@@ -64,12 +64,6 @@ const elements = {
   btnBrowse: document.getElementById('btn-browse'),
   btnManualEntry: document.getElementById('btn-manual-entry'),
   btnSampleReceipt: document.getElementById('btn-sample-receipt'),
-  ocrProgressOverlay: document.getElementById('ocr-progress-overlay'),
-  ocrProgressTitle: document.getElementById('ocr-progress-title'),
-  ocrProgressStatus: document.getElementById('ocr-progress-status'),
-  ocrProgressBar: document.getElementById('ocr-progress-bar'),
-  btnCancelOcr: document.getElementById('btn-cancel-ocr'),
-  cancelOcrBtnText: document.getElementById('cancel-ocr-btn-text'),
 
   // Screen 2: Confirm
   previewImage: document.getElementById('preview-image'),
@@ -168,15 +162,23 @@ const elements = {
   dialogCloseBtn: document.getElementById('dialog-close-btn'),
   dialogOkBtn: document.getElementById('dialog-ok-btn'),
 
-  // Camera Dialog
-  cameraDialog: document.getElementById('camera-dialog'),
+  // Camera Overlay Viewfinder
+  cameraOverlay: document.getElementById('camera-overlay'),
+  cameraViewport: document.getElementById('camera-viewport'),
   cameraVideo: document.getElementById('camera-video'),
-  cameraModalTitle: document.getElementById('camera-modal-title'),
+  cameraFlash: document.getElementById('camera-flash'),
+  cameraLoading: document.getElementById('camera-loading'),
   cameraGuideText: document.getElementById('camera-guide-text'),
+  cameraModalTitle: document.getElementById('camera-modal-title'),
+  cameraErrorContainer: document.getElementById('camera-error-container'),
+  cameraErrorMessage: document.getElementById('camera-error-message'),
   btnCloseCamera: document.getElementById('btn-close-camera'),
   btnSwitchCamera: document.getElementById('btn-switch-camera'),
   btnCapturePhoto: document.getElementById('btn-capture-photo'),
-  btnCameraUploadFallback: document.getElementById('btn-camera-upload-fallback'),
+  btnCameraGalleryAction: document.getElementById('btn-camera-gallery-action'),
+  btnCameraManualAction: document.getElementById('btn-camera-manual-action'),
+  btnRetryCamera: document.getElementById('btn-retry-camera'),
+  btnCameraErrorGallery: document.getElementById('btn-camera-error-gallery'),
 
   // Toast
   toast: document.getElementById('toast')
@@ -225,23 +227,43 @@ function setupEventListeners() {
   if (elements.btnCapturePhoto) {
     elements.btnCapturePhoto.addEventListener('click', captureFrameFromCamera);
   }
-  if (elements.btnCameraUploadFallback) {
-    elements.btnCameraUploadFallback.addEventListener('click', () => {
+  if (elements.btnCameraGalleryAction) {
+    elements.btnCameraGalleryAction.addEventListener('click', () => {
       stopLiveCamera();
       elements.fileInput.click();
     });
   }
-  if (elements.cameraDialog) {
-    elements.cameraDialog.addEventListener('cancel', (e) => {
-      e.preventDefault();
+  if (elements.btnCameraManualAction) {
+    elements.btnCameraManualAction.addEventListener('click', () => {
       stopLiveCamera();
+      state.currentPhotoUrl = null;
+      elements.previewImage.hidden = true;
+      elements.previewEmpty.hidden = false;
+      switchTab('confirm');
     });
   }
+  if (elements.btnRetryCamera) {
+    elements.btnRetryCamera.addEventListener('click', () => {
+      startLiveCamera();
+    });
+  }
+  if (elements.btnCameraErrorGallery) {
+    elements.btnCameraErrorGallery.addEventListener('click', () => {
+      stopLiveCamera();
+      elements.fileInput.click();
+    });
+  }
+
   elements.btnBrowse.addEventListener('click', (e) => {
     e.stopPropagation();
     elements.fileInput.click();
   });
-  elements.dropzone.addEventListener('click', () => elements.fileInput.click());
+
+  // Clicking the dropzone triggers the live camera
+  elements.dropzone.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return;
+    startLiveCamera();
+  });
 
   elements.fileInput.addEventListener('change', handleFileSelect);
   elements.cameraInput.addEventListener('change', handleFileSelect);
@@ -269,14 +291,6 @@ function setupEventListeners() {
   });
 
   elements.btnSampleReceipt.addEventListener('click', loadSampleReceipt);
-
-  // Cancel / Skip OCR button
-  elements.btnCancelOcr.addEventListener('click', () => {
-    ocrAborted = true;
-    elements.ocrProgressOverlay.hidden = true;
-    switchTab('confirm');
-    showToast('Skipped reading. Please check the photo and enter numbers.');
-  });
 
   // Rotation & Auto-Detect Controls
   elements.btnRotateLeft.addEventListener('click', () => rotatePreview(-90));
@@ -407,15 +421,19 @@ function updateUILanguage() {
   document.getElementById('upload-file-btn-text').textContent = dict.uploadFileBtn;
   document.getElementById('manual-entry-btn-text').textContent = dict.manualEntryBtn;
   document.getElementById('load-sample-btn-text').textContent = dict.loadSampleBtn;
-  if (elements.cancelOcrBtnText) {
-    elements.cancelOcrBtnText.textContent = dict.cancelOcrBtn || 'Skip & Enter Manually →';
-  }
   document.getElementById('ocr-notice-text').textContent = dict.ocrNotice;
-  elements.ocrProgressTitle.textContent = dict.ocrProcessing;
   if (elements.cameraModalTitle) elements.cameraModalTitle.textContent = dict.cameraModalTitle;
   if (elements.cameraGuideText) elements.cameraGuideText.textContent = dict.cameraGuide;
   if (elements.btnSwitchCamera) elements.btnSwitchCamera.setAttribute('aria-label', dict.switchCameraBtn || 'Switch Camera');
   if (elements.btnCapturePhoto) elements.btnCapturePhoto.setAttribute('aria-label', dict.capturePhotoBtn || 'Capture Receipt Photo');
+  const galleryBtnText = document.getElementById('camera-gallery-btn-text');
+  if (galleryBtnText) galleryBtnText.textContent = dict.cameraGalleryBtn || 'Gallery';
+  const manualBtnText = document.getElementById('camera-manual-btn-text');
+  if (manualBtnText) manualBtnText.textContent = dict.cameraManualBtn || 'Manual';
+  const retryBtn = document.getElementById('btn-retry-camera');
+  if (retryBtn) retryBtn.textContent = dict.cameraRetryBtn || 'Try Camera Again';
+  const fallbackGalleryBtn = document.getElementById('btn-camera-error-gallery');
+  if (fallbackGalleryBtn) fallbackGalleryBtn.textContent = dict.cameraFallbackFileBtn || 'Choose Photo from Gallery';
 
   // Screen 2: Confirm
   document.getElementById('confirm-title').textContent = dict.confirmTitle;
@@ -495,63 +513,147 @@ function updateUILanguage() {
 }
 
 /**
- * Live User Camera Controller
+ * Live Fullscreen Camera Controller
  */
 let currentCameraStream = null;
-let currentFacingMode = 'environment'; // 'environment' (rear camera) or 'user' (front)
+let currentFacingMode = 'environment'; // 'environment' (rear camera) or 'user' (front camera)
 
 async function startLiveCamera() {
+  const overlay = elements.cameraOverlay;
+  const video = elements.cameraVideo;
+  const loading = elements.cameraLoading;
+  const errorBox = elements.cameraErrorContainer;
+  const guide = elements.cameraGuideText;
+
+  // Show the camera overlay immediately
+  if (overlay) overlay.hidden = false;
+  if (errorBox) errorBox.hidden = true;
+  if (loading) loading.hidden = false;
+  if (guide) guide.textContent = t('cameraStarting') || 'Starting camera…';
+
+  stopLiveCameraTracks();
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast('Live camera not supported. Opening system camera.');
-    elements.cameraInput.click();
+    if (loading) loading.hidden = true;
+    if (errorBox) {
+      errorBox.hidden = false;
+      if (elements.cameraErrorMessage) {
+        elements.cameraErrorMessage.textContent = 'Live camera stream is not supported in this browser. You can select a photo from your gallery.';
+      }
+    } else {
+      showToast('Live camera not supported. Opening photo selector.');
+      elements.fileInput.click();
+      stopLiveCamera();
+    }
     return;
   }
 
-  try {
-    stopLiveCamera();
-
-    const constraints = {
+  // Multi-tier fallback constraints: rear camera 720p/1080p -> rear camera any res -> any camera
+  const constraintTiers = [
+    {
       video: {
         facingMode: { ideal: currentFacingMode },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       },
       audio: false
-    };
-
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    currentCameraStream = stream;
-    elements.cameraVideo.srcObject = stream;
-    await elements.cameraVideo.play();
-
-    if (elements.cameraDialog && elements.cameraDialog.showModal) {
-      elements.cameraDialog.showModal();
-    } else if (elements.cameraDialog) {
-      elements.cameraDialog.setAttribute('open', '');
+    },
+    {
+      video: {
+        facingMode: { ideal: currentFacingMode }
+      },
+      audio: false
+    },
+    {
+      video: {
+        facingMode: currentFacingMode
+      },
+      audio: false
+    },
+    {
+      video: true,
+      audio: false
     }
-  } catch (err) {
-    console.warn('Camera access notice:', err);
-    stopLiveCamera();
-    showToast(t('cameraDenied'));
-    // Fall back to native camera file input
-    elements.cameraInput.click();
+  ];
+
+  let stream = null;
+  let lastError = null;
+
+  for (const constraints of constraintTiers) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (stream) break;
+    } catch (err) {
+      lastError = err;
+      console.warn('Camera constraint tier attempt:', err.name, err.message);
+    }
   }
+
+  if (!stream) {
+    if (loading) loading.hidden = true;
+    console.error('All camera attempts failed:', lastError);
+    if (errorBox) {
+      errorBox.hidden = false;
+      if (elements.cameraErrorMessage) {
+        if (lastError && (lastError.name === 'NotAllowedError' || lastError.name === 'PermissionDeniedError')) {
+          elements.cameraErrorMessage.textContent = 'Camera permission was denied. Please allow camera permissions in browser site settings, or choose a photo from your device.';
+        } else {
+          elements.cameraErrorMessage.textContent = 'Unable to access the camera hardware. Please check your camera permissions or select a photo file.';
+        }
+      }
+    } else {
+      showToast(t('cameraDenied') || 'Camera permission required.');
+      stopLiveCamera();
+    }
+    return;
+  }
+
+  currentCameraStream = stream;
+  if (video) {
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('autoplay', 'true');
+    video.setAttribute('muted', 'true');
+
+    // Wait for stream metadata to guarantee play() won't reject with AbortError
+    await new Promise((resolve) => {
+      if (video.readyState >= 1) {
+        resolve();
+      } else {
+        video.onloadedmetadata = () => resolve();
+        setTimeout(resolve, 2500); // 2.5s safeguard
+      }
+    });
+
+    try {
+      await video.play();
+    } catch (playErr) {
+      console.warn('Video play notice:', playErr);
+    }
+  }
+
+  if (loading) loading.hidden = true;
+  if (guide) guide.textContent = t('cameraGuide') || 'Align receipt within frame & tap capture';
 }
 
-function stopLiveCamera() {
+function stopLiveCameraTracks() {
   if (currentCameraStream) {
-    currentCameraStream.getTracks().forEach(track => track.stop());
+    currentCameraStream.getTracks().forEach(track => {
+      try { track.stop(); } catch(e) {}
+    });
     currentCameraStream = null;
   }
   if (elements.cameraVideo) {
     elements.cameraVideo.srcObject = null;
   }
-  if (elements.cameraDialog) {
-    if (elements.cameraDialog.close) {
-      try { elements.cameraDialog.close(); } catch(e) {}
-    } else {
-      elements.cameraDialog.removeAttribute('open');
-    }
+}
+
+function stopLiveCamera() {
+  stopLiveCameraTracks();
+  if (elements.cameraOverlay) {
+    elements.cameraOverlay.hidden = true;
   }
 }
 
@@ -561,12 +663,25 @@ async function switchCameraFacing() {
 }
 
 function captureFrameFromCamera() {
-  if (!elements.cameraVideo || !elements.cameraVideo.videoWidth) {
+  const video = elements.cameraVideo;
+  if (!video || !video.videoWidth) {
     showToast('Camera feed not ready. Please try again.');
     return;
   }
 
-  const video = elements.cameraVideo;
+  // Tactile feedback
+  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+    try { navigator.vibrate(40); } catch(e) {}
+  }
+
+  // Flash feedback
+  if (elements.cameraFlash) {
+    elements.cameraFlash.classList.add('flash-active');
+    setTimeout(() => {
+      if (elements.cameraFlash) elements.cameraFlash.classList.remove('flash-active');
+    }, 120);
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
@@ -575,12 +690,16 @@ function captureFrameFromCamera() {
 
   const capturedDataUrl = canvas.toDataURL('image/jpeg', 0.92);
 
+  // Stop camera immediately
   stopLiveCamera();
 
+  // Load into confirm preview and run non-blocking OCR
   state.currentPhotoUrl = capturedDataUrl;
   state.rotationAngle = 0;
   loadPhotoIntoPreview(capturedDataUrl, () => {
-    runOCRAndPopulate();
+    switchTab('confirm');
+    showToast('✓ Photo captured! Reading numbers…');
+    runOCRNonBlocking();
   });
 }
 
@@ -604,7 +723,9 @@ async function processImageFile(file) {
     state.currentPhotoUrl = event.target.result;
     state.rotationAngle = 0;
     loadPhotoIntoPreview(state.currentPhotoUrl, () => {
-      runOCRAndPopulate();
+      switchTab('confirm');
+      showToast('Photo loaded! Reading numbers…');
+      runOCRNonBlocking();
     });
   };
   reader.readAsDataURL(file);
@@ -634,59 +755,61 @@ function updatePreviewTransform() {
   }
 }
 
-let ocrAborted = false;
-
 /**
- * Fast Optical Recognition & Number Populator
- * Auto-detects prescription numbers with an unbreakable 8-second safety timeout
+ * Non-Blocking Optical Recognition & Number Populator
+ * Auto-detects prescription numbers INLINE on the Confirm screen without ANY blocking modal!
  */
-async function runOCRAndPopulate() {
-  ocrAborted = false;
-  elements.ocrProgressOverlay.hidden = false;
-  elements.ocrProgressBar.style.width = '15%';
-  elements.ocrProgressTitle.textContent = t('ocrProcessing');
-  elements.ocrProgressStatus.textContent = 'Reading receipt lines… (tap Skip anytime)';
+async function runOCRNonBlocking() {
+  const inlineStatus = document.getElementById('ocr-inline-status');
+  const inlineMsg = document.getElementById('ocr-inline-msg');
+  const autoDetectBtn = elements.btnAutoDetectOcr;
+
+  if (inlineStatus) inlineStatus.hidden = false;
+  if (inlineMsg) inlineMsg.textContent = 'Reading receipt numbers…';
+  if (autoDetectBtn) autoDetectBtn.disabled = true;
 
   try {
     const ocrPromise = runReceiptOCR(
       state.currentImageElement,
       state.rotationAngle,
       (statusText, pct) => {
-        if (ocrAborted) return;
-        elements.ocrProgressStatus.textContent = statusText;
-        if (pct) elements.ocrProgressBar.style.width = `${Math.max(15, Math.min(100, pct))}%`;
+        if (inlineMsg) inlineMsg.textContent = statusText;
       }
     );
 
-    // Hard 8-second timeout so user is NEVER stuck under ANY circumstances
+    // Hard 8-second safety timeout
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('TIMEOUT')), 8000)
     );
 
     const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
 
-    if (ocrAborted) return;
-
-    elements.ocrProgressBar.style.width = '100%';
-    setTimeout(() => {
-      elements.ocrProgressOverlay.hidden = true;
-    }, 200);
-
     if (ocrResult && ocrResult.success && ocrResult.parsed && 
         (ocrResult.parsed.od.sph !== null || ocrResult.parsed.os.sph !== null || ocrResult.parsed.pd !== null)) {
       populateConfirmFields(ocrResult.parsed);
-      switchTab('confirm');
-      showToast('✓ Receipt numbers detected! Please review and confirm.');
+      if (inlineStatus) {
+        inlineStatus.innerHTML = '<span class="text-success font-semibold">✓ Prescription numbers auto-detected! Review against photo.</span>';
+        inlineStatus.hidden = false;
+      }
+      showToast('✓ Receipt numbers detected! Review and verify.');
     } else {
-      switchTab('confirm');
-      showToast('Receipt photo loaded! Please check and type numbers on the right.');
+      if (inlineStatus) {
+        inlineStatus.innerHTML = '<span class="text-muted">Receipt photo ready. Please check photo and enter numbers below.</span>';
+        inlineStatus.hidden = false;
+      }
+      showToast('Receipt photo ready. Please enter numbers from photo.');
     }
   } catch (err) {
-    if (ocrAborted) return;
-    console.warn('OCR processing notice:', err);
-    elements.ocrProgressOverlay.hidden = true;
-    switchTab('confirm');
-    showToast('Receipt photo ready! Enter or confirm the numbers from the photo.');
+    console.warn('Non-blocking OCR notice:', err);
+    if (inlineStatus) {
+      inlineStatus.innerHTML = '<span class="text-muted">Enter numbers directly from the photo.</span>';
+      inlineStatus.hidden = false;
+    }
+  } finally {
+    if (autoDetectBtn) autoDetectBtn.disabled = false;
+    setTimeout(() => {
+      if (inlineStatus) inlineStatus.hidden = true;
+    }, 6000);
   }
 }
 
